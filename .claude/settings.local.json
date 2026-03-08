@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__audio-analyzer__full_analysis",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "audio-analyzer"
+  ]
+}

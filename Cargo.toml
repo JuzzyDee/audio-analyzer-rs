@@ -1,0 +1,50 @@
+[package]
+name = "audio_visualizer_rs"
+version = "0.1.0"
+edition = "2024"
+
+# We now have two binaries: the CLI tool and the MCP server.
+# Cargo lets you define multiple binaries in one project.
+# `cargo run --bin cli` runs the CLI, `cargo run --bin mcp-server` runs the MCP server.
+
+[[bin]]
+name = "cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "mcp-server"
+path = "src/mcp_server.rs"
+
+[dependencies]
+# Symphonia: pure-Rust audio decoding.
+symphonia = { version = "0.5", features = ["mp3", "ogg", "aac", "flac", "wav", "pcm"] }
+
+# RustFFT: Fast Fourier Transform, the core algorithm behind spectral analysis.
+rustfft = "6.2"
+
+# rmcp: Official MCP (Model Context Protocol) SDK for Rust.
+# "server" enables server-side functionality (we're building a tool server).
+# "transport-io" enables stdio transport (how Claude Code communicates with MCP servers).
+rmcp = { version = "1.1", features = ["server", "transport-io"] }
+
+# Tokio: async runtime for Rust. MCP communication is inherently async
+# (waiting for requests, sending responses). Tokio is the standard async
+# runtime — think of it like Python's asyncio but much more performant.
+# "full" enables all features (IO, timers, sync primitives, macros).
+tokio = { version = "1", features = ["full"] }
+
+# Serde: Rust's universal serialization framework. Converts Rust structs
+# to/from JSON, TOML, YAML, etc. The "derive" feature lets you add
+# #[derive(Serialize, Deserialize)] to auto-generate the conversion code.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Schemars: generates JSON Schema from Rust types. MCP uses JSON Schema
+# to describe tool parameters so Claude knows what arguments each tool accepts.
+schemars = "1.0"
+
+# Tracing: structured logging for async Rust. Better than println! for
+# production code — supports log levels, structured fields, and integrates
+# with the MCP server's logging system.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
