@@ -2,6 +2,9 @@
 name = "audio_visualizer_rs"
 version = "0.1.0"
 edition = "2024"
+license-file = "LICENSE"
+description = "MCP server that gives Claude the ability to hear music"
+repository = "https://github.com/JuzzyDee/audio-analyzer-rs"
 
 # We now have two binaries: the CLI tool and the MCP server.
 # Cargo lets you define multiple binaries in one project.

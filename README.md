@@ -41,7 +41,11 @@ Binaries will be at `target/release/mcp-server` and `target/release/cli`.
 
 ## Setup
 
-Add the MCP server to your Claude Code configuration in `~/.claude/settings.json`:
+Replace `/path/to/mcp-server` below with the actual path to the binary (e.g. `target/release/mcp-server` from your build, or wherever you placed the downloaded binary).
+
+### Claude Code
+
+Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -53,9 +57,28 @@ Add the MCP server to your Claude Code configuration in `~/.claude/settings.json
 }
 ```
 
-Replace `/path/to/mcp-server` with the actual path to the binary (e.g., the `target/release/mcp-server` from your build, or wherever you placed the downloaded binary).
-
 Restart Claude Code. The server will appear in your MCP tools list.
+
+### Claude Desktop
+
+Add to your Claude Desktop config file:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "audio-analyzer": {
+      "command": "/path/to/mcp-server"
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The audio analysis tools will be available in your conversations.
+
+**Note**: This is a local MCP server using stdio transport, so it requires Claude Code or Claude Desktop. It does not work with claude.ai in the browser or mobile apps.
 
 ## Usage
 
@@ -159,4 +182,4 @@ Key dependencies: [symphonia](https://github.com/pdeljanov/Symphonia) (audio dec
 
 ## License
 
-MIT
+Non-commercial use only. Free for personal, educational, and research purposes. Commercial use requires a separate license -- see [LICENSE](LICENSE) for details.
