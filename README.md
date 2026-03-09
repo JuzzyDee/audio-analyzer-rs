@@ -2,15 +2,15 @@
 
 **An MCP server that gives Claude the ability to hear music.**
 
-Point Claude at any audio file and it can tell you the key, tempo, dynamics, timbre, and how the music evolves over time -- all from raw audio analysis, no images, no guessing, under 1% context window usage.
+Point Claude at any audio file and it can tell you the key, tempo, dynamics, timbre, percussive character, and how the music evolves over time -- all from raw audio analysis, no images, no guessing, under 1% context window usage.
 
 ## What is this?
 
 LLMs can see (vision) and read (text), but they can't hear. This project bridges that gap by running real audio analysis -- the same DSP techniques used in music information retrieval research -- and returning structured numerical data that Claude can reason about.
 
-It's an [MCP server](https://modelcontextprotocol.io/) that exposes audio analysis as tools Claude can call on demand. Ask Claude to analyze a song and it will decode the audio, run spectral/harmonic/rhythm analysis, and return the results as compact text. No spectrograms, no images, no wasted tokens.
+It's an [MCP server](https://modelcontextprotocol.io/) that exposes audio analysis as tools Claude can call on demand. Ask Claude to analyze a song and it will decode the audio, run spectral/harmonic/rhythm/percussive analysis, and return the results as compact text. No spectrograms, no images, no wasted tokens.
 
-Full analysis of a 60-second track completes in ~150-230ms. Pure Rust. No Python, no FFmpeg, no system dependencies.
+Full analysis of a 60-second track completes in under 2 seconds (including source separation). Pure Rust. No Python, no FFmpeg, no system dependencies.
 
 ## Features
 
@@ -20,6 +20,7 @@ Full analysis of a 60-second track completes in ~150-230ms. Pure Rust. No Python
 - **Timbre** -- 13 MFCCs (Mel-frequency cepstral coefficients)
 - **Harmonic analysis** -- chromagram, key detection (Krumhansl-Schmuckler algorithm), tonnetz
 - **Rhythm analysis** -- tempo estimation, beat tracking, onset detection, tempo stability
+- **Percussive character** -- harmonic/percussive source separation (HPSS), attack sharpness, onset density
 - **Time-series data** -- track how every feature evolves over time at selectable resolution
 - **Token-efficient** -- downsampled output calibrated to fit comfortably in the context window
 
@@ -56,7 +57,7 @@ claude mcp add --scope user audio-analyzer -- /path/to/mcp-server
 
 ```bash
 git clone https://github.com/JuzzyDee/audio-analyzer-rs.git
-cd audio_visualizer_rs
+cd audio-analyzer-rs
 cargo build --release
 claude mcp add --scope user audio-analyzer -- target/release/mcp-server
 ```
@@ -83,7 +84,7 @@ Once configured, Claude can call these tools directly:
 | `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs) |
 | `harmonic_analysis` | Key detection, pitch class distribution, tonnetz |
 | `rhythm_analysis` | Tempo (BPM), beat positions, tempo stability |
-| `full_analysis` | Everything above in one call |
+| `full_analysis` | Everything above in one call, plus percussive character (HPSS) |
 
 ### Example: full_analysis output
 
@@ -119,6 +120,12 @@ Tempo: 138.2 BPM (confidence: 0.614)
 Beats detected: 134
 Mean tempo: 137.8 BPM | Median: 138.1 BPM
 Stability: 0.721 (0=free, 1=locked)
+
+── Percussive Character ──
+HPSS computed in: 1.24s (kernel: 15)
+Percussive ratio: 0.312 — mostly harmonic (piano-dominant)
+Onset density: 4.2/sec
+Peak attack sharpness: 0.847 at 23.4s
 ```
 
 When you add `resolution: "medium"`, the output also includes a time-series table showing how every feature changes over the track's duration -- letting Claude see the intro build, the dynamic solo section, and the quiet outro.
@@ -135,7 +142,7 @@ All analysis tools accept an optional `resolution` parameter that controls time-
 
 You can also pass a numeric string (e.g., `"20"`) for custom rates.
 
-Without `resolution`, tools return summary statistics only (averages across the whole track). With it, you get a compact TSV table showing how features evolve over time -- centroid, RMS, chroma, onset strength, and more, all aligned to the same time axis.
+Without `resolution`, tools return summary statistics only (averages across the whole track). With it, you get a compact TSV table showing how features evolve over time -- centroid, RMS, chroma, onset strength, percussive ratio, attack sharpness, and more, all aligned to the same time axis.
 
 The presets are calibrated for token efficiency. A 3-minute track at `"medium"` resolution produces roughly 180 rows of data -- enough to track musical structure without blowing up the context window.
 
@@ -150,13 +157,14 @@ load_audio()          -- Symphonia decodes to mono f32 samples
     v
 compute_spectrogram() -- STFT via rustfft, produces time-frequency matrix
     |
-    +---> spectral.rs  -- centroid, bandwidth, rolloff, flatness, MFCCs
-    +---> temporal.rs  -- RMS energy, zero crossing rate
-    +---> harmonic.rs  -- chromagram, key detection, tonnetz
-    +---> rhythm.rs    -- onset detection, tempo, beat tracking
+    +---> spectral.rs    -- centroid, bandwidth, rolloff, flatness, MFCCs
+    +---> temporal.rs    -- RMS energy, zero crossing rate
+    +---> harmonic.rs    -- chromagram, key detection, tonnetz
+    +---> rhythm.rs      -- onset detection, tempo, beat tracking
+    +---> percussive.rs  -- HPSS (source separation), attack sharpness, onset density
     |
     v
-downsample.rs         -- bin-average to target resolution, format as TSV
+downsample.rs           -- bin-average to target resolution, format as TSV
 ```
 
 Two binaries share the same analysis library:
