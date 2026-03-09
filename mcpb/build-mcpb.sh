@@ -20,6 +20,7 @@ set -euo pipefail
 
 VERSION="${1:?Usage: build-mcpb.sh <version>}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUTPUT_DIR="$(pwd)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -35,7 +36,7 @@ build_bundle() {
     mkdir -p "$staging/server"
 
     # Copy manifest and update version
-    sed "s/\"0.1.0\"/\"$VERSION\"/" "$SCRIPT_DIR/manifest.json" > "$staging/manifest.json"
+    sed "s/\"0.2.0\"/\"$VERSION\"/" "$SCRIPT_DIR/manifest.json" > "$staging/manifest.json"
 
     # Extract binary from archive
     if [[ "$archive" == *.zip ]]; then
@@ -46,8 +47,8 @@ build_bundle() {
 
     chmod +x "$staging/server/$binary_name" 2>/dev/null || true
 
-    # Create .mcpb (zip archive)
-    (cd "$staging" && zip -q -r "../../$output_name.mcpb" .)
+    # Create .mcpb (zip archive) in the output directory
+    (cd "$staging" && zip -q -r "$OUTPUT_DIR/$output_name.mcpb" .)
 
     echo "  -> $output_name.mcpb"
 }
