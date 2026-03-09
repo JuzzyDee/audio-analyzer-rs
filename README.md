@@ -41,7 +41,7 @@ Download the `.mcpb` bundle for your platform from [GitHub Releases](https://git
 ```bash
 brew tap JuzzyDee/tap
 brew install audio-analyzer
-claude mcp add audio-analyzer $(which audio-analyzer-mcp)
+claude mcp add --scope user audio-analyzer -- $(which audio-analyzer-mcp)
 ```
 
 ### Claude Code — manual (all platforms)
@@ -49,7 +49,7 @@ claude mcp add audio-analyzer $(which audio-analyzer-mcp)
 Download the `mcp-server` binary for your platform from [GitHub Releases](https://github.com/JuzzyDee/audio-analyzer-rs/releases), then:
 
 ```bash
-claude mcp add audio-analyzer /path/to/mcp-server
+claude mcp add --scope user audio-analyzer -- /path/to/mcp-server
 ```
 
 ### Build from source
@@ -58,7 +58,7 @@ claude mcp add audio-analyzer /path/to/mcp-server
 git clone https://github.com/JuzzyDee/audio-analyzer-rs.git
 cd audio_visualizer_rs
 cargo build --release
-claude mcp add audio-analyzer target/release/mcp-server
+claude mcp add --scope user audio-analyzer -- target/release/mcp-server
 ```
 
 Restart Claude Desktop. The audio analysis tools will be available in your conversations.
