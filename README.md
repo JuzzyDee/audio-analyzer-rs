@@ -25,6 +25,16 @@ Full analysis of a 60-second track completes in ~150-230ms. Pure Rust. No Python
 
 ## Installation
 
+### Homebrew (macOS — recommended)
+
+```bash
+brew tap JuzzyDee/tap
+brew install audio-analyzer
+audio-analyzer-setup
+```
+
+The setup script auto-detects Claude Code and Claude Desktop and patches their config files. Restart Claude after running it.
+
 ### Pre-built binaries
 
 Download the latest binary for your platform from [GitHub Releases](https://github.com/JuzzyDee/audio-analyzer-rs/releases).
