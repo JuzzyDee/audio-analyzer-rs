@@ -25,19 +25,32 @@ Full analysis of a 60-second track completes in ~150-230ms. Pure Rust. No Python
 
 ## Installation
 
-### Homebrew (macOS — recommended)
+### Claude Desktop — one-click install
+
+Download the `.mcpb` bundle for your platform from [GitHub Releases](https://github.com/JuzzyDee/audio-analyzer-rs/releases) and open it. Claude Desktop will handle the rest — no config files, no terminal, no setup.
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `audio-analyzer-darwin-arm64.mcpb` |
+| macOS (Intel) | `audio-analyzer-darwin-x64.mcpb` |
+| Windows | `audio-analyzer-win32-x64.mcpb` |
+| Linux | `audio-analyzer-linux-x64.mcpb` |
+
+### Claude Code — Homebrew (macOS)
 
 ```bash
 brew tap JuzzyDee/tap
 brew install audio-analyzer
-audio-analyzer-setup
+claude mcp add audio-analyzer $(which audio-analyzer-mcp)
 ```
 
-The setup script auto-detects Claude Code and Claude Desktop and patches their config files. Restart Claude after running it.
+### Claude Code — manual (all platforms)
 
-### Pre-built binaries
+Download the `mcp-server` binary for your platform from [GitHub Releases](https://github.com/JuzzyDee/audio-analyzer-rs/releases), then:
 
-Download the latest binary for your platform from [GitHub Releases](https://github.com/JuzzyDee/audio-analyzer-rs/releases).
+```bash
+claude mcp add audio-analyzer /path/to/mcp-server
+```
 
 ### Build from source
 
@@ -45,45 +58,7 @@ Download the latest binary for your platform from [GitHub Releases](https://gith
 git clone https://github.com/JuzzyDee/audio-analyzer-rs.git
 cd audio_visualizer_rs
 cargo build --release
-```
-
-Binaries will be at `target/release/mcp-server` and `target/release/cli`.
-
-## Setup
-
-Replace `/path/to/mcp-server` below with the actual path to the binary (e.g. `target/release/mcp-server` from your build, or wherever you placed the downloaded binary).
-
-### Claude Code
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "audio-analyzer": {
-      "command": "/path/to/mcp-server"
-    }
-  }
-}
-```
-
-Restart Claude Code. The server will appear in your MCP tools list.
-
-### Claude Desktop
-
-Add to your Claude Desktop config file:
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "audio-analyzer": {
-      "command": "/path/to/mcp-server"
-    }
-  }
-}
+claude mcp add audio-analyzer target/release/mcp-server
 ```
 
 Restart Claude Desktop. The audio analysis tools will be available in your conversations.

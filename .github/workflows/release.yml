@@ -77,6 +77,12 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Build MCPB bundles
+        run: |
+          cd artifacts
+          VERSION="${GITHUB_REF_NAME#v}"
+          bash ../mcpb/build-mcpb.sh "$VERSION"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
