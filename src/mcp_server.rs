@@ -23,7 +23,7 @@ use serde::Deserialize;
 
 // Import our analysis library
 use audio_visualizer_rs::load_audio;
-use audio_visualizer_rs::analysis::{spectral, harmonic, rhythm, temporal, downsample};
+use audio_visualizer_rs::analysis::{spectral, harmonic, rhythm, temporal, percussive, downsample};
 
 // ---- Tool parameter structs ----
 // `JsonSchema` generates the schema Claude sees when discovering our tools.
@@ -326,7 +326,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), and rhythm (tempo, beats). Full picture in one call. Set resolution for all time-series data.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Full picture in one call. Set resolution for all time-series data.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
@@ -374,6 +374,9 @@ impl AudioAnalyzerServer {
 
                 let rhythm_result = rhythm::analyse_rhythm(&spectrogram, None, None);
                 let beat_stats = rhythm::beat_statistics(&rhythm_result.beat_times);
+
+                let hpss_result = percussive::hpss(&spectrogram, None);
+                let perc_feats = percussive::percussive_features(&hpss_result, audio.sample_rate, spectrogram.hop_length);
 
                 let elapsed = start.elapsed();
 
@@ -426,6 +429,22 @@ impl AudioAnalyzerServer {
                     ));
                 }
 
+                // Percussive analysis summary
+                let avg_perc_ratio = avg(&perc_feats.percussive_ratio);
+                let avg_onset_density = avg(&perc_feats.onset_density);
+                let max_sharpness = perc_feats.attack_sharpness.iter().cloned().fold(0.0_f32, f32::max);
+                result.push_str(&format!(
+                    "\n── Percussive Character ──\n\
+                     Percussive ratio:    {:.3} — {}\n\
+                     Onset density:       {:.1}/sec — {}\n\
+                     Peak attack sharp:   {:.3}\n",
+                    avg_perc_ratio,
+                    if avg_perc_ratio > 0.6 { "percussion-dominated" } else if avg_perc_ratio > 0.35 { "balanced" } else { "harmony-dominated" },
+                    avg_onset_density,
+                    if avg_onset_density > 4.0 { "very dense" } else if avg_onset_density > 2.0 { "moderate" } else if avg_onset_density > 0.5 { "sparse" } else { "minimal" },
+                    max_sharpness,
+                ));
+
                 // Append unified time-series table if resolution was requested
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
@@ -439,6 +458,9 @@ impl AudioAnalyzerServer {
                             let ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
                             let ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
                             let ds_onset = downsample::downsample_f32(&rhythm_result.onset_envelope, fps, target_fps);
+                            let ds_perc_ratio = downsample::downsample_f32(&perc_feats.percussive_ratio, fps, target_fps);
+                            let ds_attack = downsample::downsample_f32(&perc_feats.attack_sharpness, fps, target_fps);
+                            let ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
                             let ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
                             let ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
 
@@ -455,6 +477,9 @@ impl AudioAnalyzerServer {
                                     (&["rms"], &ds_rms[..]),
                                     (&["zcr"], &ds_zcr[..]),
                                     (&["onset"], &ds_onset[..]),
+                                    (&["perc_ratio"], &ds_perc_ratio[..]),
+                                    (&["attack"], &ds_attack[..]),
+                                    (&["density"], &ds_density[..]),
                                 ],
                                 Some((&ds_chroma, chroma_cols)),
                                 Some((&ds_tonnetz, tonnetz_cols)),

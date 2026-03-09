@@ -12,4 +12,5 @@ pub mod spectral;
 pub mod harmonic;
 pub mod rhythm;
 pub mod temporal;
+pub mod percussive;
 pub mod downsample;

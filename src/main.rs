@@ -7,6 +7,7 @@ use audio_visualizer_rs::load_audio;
 use audio_visualizer_rs::analysis::spectral;
 use audio_visualizer_rs::analysis::harmonic;
 use audio_visualizer_rs::analysis::rhythm;
+use audio_visualizer_rs::analysis::percussive;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -161,7 +162,24 @@ fn main() {
 
     println!("  Computed in:     {:.2?}\n", rhythm_time);
 
+    // --- Step 6: Percussive analysis (HPSS) ---
+    println!("Computing percussive analysis (HPSS)...");
+    let start = Instant::now();
+
+    let hpss_result = percussive::hpss(&spectrogram, None);
+    let perc_feats = percussive::percussive_features(&hpss_result, audio.sample_rate, spectrogram.hop_length);
+    let perc_time = start.elapsed();
+
+    let avg_perc_ratio = avg(&perc_feats.percussive_ratio);
+    let avg_density = avg(&perc_feats.onset_density);
+    let max_sharpness = perc_feats.attack_sharpness.iter().cloned().fold(0.0_f32, f32::max);
+
+    println!("  Percussive ratio:  {:.3} (0=harmonic, 1=percussive)", avg_perc_ratio);
+    println!("  Onset density:     {:.1}/sec", avg_density);
+    println!("  Peak attack sharp: {:.3}", max_sharpness);
+    println!("  Computed in:       {:.2?}\n", perc_time);
+
     // --- Summary ---
-    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time;
+    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time;
     println!("=== TOTAL: {:.2?} ===", total);
 }
