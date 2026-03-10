@@ -25,6 +25,49 @@ use serde::Deserialize;
 use audio_visualizer_rs::load_audio;
 use audio_visualizer_rs::analysis::{spectral, harmonic, rhythm, temporal, percussive, downsample};
 
+// ---- Lenient numeric deserialization ----
+// Models sometimes send numbers as strings (e.g. "110" instead of 110).
+// These helpers accept either form so tool calls don't fail on type mismatch.
+
+fn deserialize_lenient_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    use serde::de;
+    struct LenientF32;
+    impl<'de> de::Visitor<'de> for LenientF32 {
+        type Value = Option<f32>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a number or numeric string")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { Ok(Some(v as f32)) }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { Ok(Some(v as f32)) }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> { Ok(Some(v as f32)) }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            v.parse::<f32>().map(Some).map_err(de::Error::custom)
+        }
+    }
+    d.deserialize_any(LenientF32)
+}
+
+fn deserialize_lenient_usize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<usize>, D::Error> {
+    use serde::de;
+    struct LenientUsize;
+    impl<'de> de::Visitor<'de> for LenientUsize {
+        type Value = Option<usize>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "an integer or numeric string")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { Ok(Some(v as usize)) }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { Ok(Some(v as usize)) }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            v.parse::<usize>().map(Some).map_err(de::Error::custom)
+        }
+    }
+    d.deserialize_any(LenientUsize)
+}
+
 // ---- Tool parameter structs ----
 // `JsonSchema` generates the schema Claude sees when discovering our tools.
 
@@ -38,12 +81,20 @@ struct AudioInfoParams {
 struct SpectralParams {
     /// Absolute path to the audio file
     path: String,
-    /// FFT window size (default: 2048). Larger = better frequency resolution.
+    /// FFT window size (default: 2048). Rarely needs changing.
+    #[serde(default, deserialize_with = "deserialize_lenient_usize")]
     n_fft: Option<usize>,
-    /// Hop length between windows (default: n_fft/4). Smaller = better time resolution.
+    /// Hop length between windows (default: n_fft/4). Rarely needs changing.
+    #[serde(default, deserialize_with = "deserialize_lenient_usize")]
     hop_length: Option<usize>,
     /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
     resolution: Option<String>,
+    /// Start time in seconds — analyse from this point. Omit to start from the beginning.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    start_time: Option<f32>,
+    /// End time in seconds — analyse up to this point. Omit to analyse to the end.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    end_time: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -52,18 +103,32 @@ struct HarmonicParams {
     path: String,
     /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
     resolution: Option<String>,
+    /// Start time in seconds — analyse from this point. Omit to start from the beginning.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    start_time: Option<f32>,
+    /// End time in seconds — analyse up to this point. Omit to analyse to the end.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    end_time: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct RhythmParams {
     /// Absolute path to the audio file
     path: String,
-    /// Minimum BPM to consider (default: 50)
+    /// Internal search range lower bound for tempo detection. Default 50. You almost never need to set this — only use if tempo detection gives wrong results and you know the approximate BPM range.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
     min_bpm: Option<f32>,
-    /// Maximum BPM to consider (default: 220)
+    /// Internal search range upper bound for tempo detection. Default 220. You almost never need to set this — only use if tempo detection gives wrong results and you know the approximate BPM range.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
     max_bpm: Option<f32>,
     /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
     resolution: Option<String>,
+    /// Start time in seconds — analyse from this point. Omit to start from the beginning.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    start_time: Option<f32>,
+    /// End time in seconds — analyse up to this point. Omit to analyse to the end.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    end_time: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -72,6 +137,12 @@ struct FullAnalysisParams {
     path: String,
     /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
     resolution: Option<String>,
+    /// Start time in seconds — analyse from this point. Omit to start from the beginning.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    start_time: Option<f32>,
+    /// End time in seconds — analyse up to this point. Omit to analyse to the end.
+    #[serde(default, deserialize_with = "deserialize_lenient_f32")]
+    end_time: Option<f32>,
 }
 
 // ---- The MCP Server ----
@@ -89,20 +160,70 @@ impl AudioAnalyzerServer {
     }
 }
 
-// Helper: load audio and compute spectrogram in one step.
+/// Result of loading and optionally slicing audio.
+struct AnalysisInput {
+    audio: audio_visualizer_rs::AudioData,
+    spectrogram: spectral::Spectrogram,
+    /// Time offset in seconds — non-zero when a start_time slice was applied.
+    /// Add this to all output timestamps so they reflect absolute file position.
+    time_offset: f32,
+}
+
+// Helper: load audio, optionally slice to a time range, and compute spectrogram.
 fn load_and_analyse(
     path: &str,
     n_fft: Option<usize>,
     hop_length: Option<usize>,
-) -> Result<(audio_visualizer_rs::AudioData, spectral::Spectrogram), String> {
-    let audio = load_audio(path)?;
+    start_time: Option<f32>,
+    end_time: Option<f32>,
+) -> Result<AnalysisInput, String> {
+    let mut audio = load_audio(path)?;
+
+    // Apply time slicing if requested
+    let time_offset = start_time.unwrap_or(0.0).max(0.0);
+    let start_sample = (time_offset * audio.sample_rate as f32) as usize;
+    let end_sample = end_time
+        .map(|t| (t * audio.sample_rate as f32) as usize)
+        .unwrap_or(audio.samples.len())
+        .min(audio.samples.len());
+
+    if start_sample >= end_sample || start_sample >= audio.samples.len() {
+        return Err(format!(
+            "Invalid time range: {:.1}s–{:.1}s (file is {:.1}s)",
+            time_offset,
+            end_time.unwrap_or(audio.duration as f32),
+            audio.duration,
+        ));
+    }
+
+    audio.samples = audio.samples[start_sample..end_sample].to_vec();
+    audio.duration = audio.samples.len() as f64 / audio.sample_rate as f64;
+
     let spectrogram = spectral::compute_spectrogram(
         &audio.samples,
         audio.sample_rate,
         n_fft,
         hop_length,
     );
-    Ok((audio, spectrogram))
+    Ok(AnalysisInput { audio, spectrogram, time_offset })
+}
+
+/// Offset timestamps in downsampled f32 series by adding time_offset.
+fn offset_times(series: &mut [(f32, f32)], offset: f32) {
+    if offset > 0.0 {
+        for (t, _) in series.iter_mut() {
+            *t += offset;
+        }
+    }
+}
+
+/// Offset timestamps in downsampled array series by adding time_offset.
+fn offset_times_array<const N: usize>(series: &mut [(f32, [f32; N])], offset: f32) {
+    if offset > 0.0 {
+        for (t, _) in series.iter_mut() {
+            *t += offset;
+        }
+    }
 }
 
 // `#[tool_router]` collects all #[tool] methods and builds the routing table.
@@ -124,10 +245,10 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Set resolution for time-series data.")]
+    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Set resolution for time-series data. Use start_time/end_time to zoom into a specific section.")]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
-        match load_and_analyse(&params.path, params.n_fft, params.hop_length) {
-            Ok((audio, spectrogram)) => {
+        match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
+            Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
                 let centroid = spectral::spectral_centroid(&spectrogram);
                 let bandwidth = spectral::spectral_bandwidth(&spectrogram);
                 let rolloff = spectral::spectral_rolloff(&spectrogram, None);
@@ -182,12 +303,18 @@ impl AudioAnalyzerServer {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
                             let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
-                            let ds_centroid = downsample::downsample_f32(&centroid, fps, target_fps);
-                            let ds_bandwidth = downsample::downsample_f32(&bandwidth, fps, target_fps);
-                            let ds_rolloff = downsample::downsample_f32(&rolloff, fps, target_fps);
-                            let ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
-                            let ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
-                            let ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
+                            let mut ds_centroid = downsample::downsample_f32(&centroid, fps, target_fps);
+                            let mut ds_bandwidth = downsample::downsample_f32(&bandwidth, fps, target_fps);
+                            let mut ds_rolloff = downsample::downsample_f32(&rolloff, fps, target_fps);
+                            let mut ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
+                            let mut ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
+                            let mut ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
+                            offset_times(&mut ds_centroid, time_offset);
+                            offset_times(&mut ds_bandwidth, time_offset);
+                            offset_times(&mut ds_rolloff, time_offset);
+                            offset_times(&mut ds_flatness, time_offset);
+                            offset_times(&mut ds_rms, time_offset);
+                            offset_times(&mut ds_zcr, time_offset);
                             result.push_str(&downsample::format_f32_series(
                                 "Spectral/Temporal Features Over Time",
                                 &["centroid_hz", "bandwidth_hz", "rolloff_hz", "flatness", "rms", "zcr"],
@@ -204,10 +331,10 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships. Essential for understanding melody, chords, and harmony. Set resolution for time-series data.")]
+    #[tool(description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships. Essential for understanding melody, chords, and harmony. Set resolution for time-series data. Use start_time/end_time to zoom into a specific section.")]
     fn harmonic_analysis(&self, Parameters(params): Parameters<HarmonicParams>) -> String {
-        match load_and_analyse(&params.path, None, None) {
-            Ok((audio, spectrogram)) => {
+        match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
+            Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
                 let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
                 let tonnetz = harmonic::compute_tonnetz(&chromagram);
                 let (key, mode, confidence) = chromagram.estimate_key();
@@ -258,13 +385,15 @@ impl AudioAnalyzerServer {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
                             let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
-                            let ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
+                            let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
+                            offset_times_array(&mut ds_chroma, time_offset);
                             result.push_str(&downsample::format_array_series(
                                 "Chromagram Over Time",
                                 &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
                                 &ds_chroma,
                             ));
-                            let ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
+                            let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
+                            offset_times_array(&mut ds_tonnetz, time_offset);
                             result.push_str(&downsample::format_array_series(
                                 "Tonnetz Over Time",
                                 &["fifth_sin", "fifth_cos", "min3_sin", "min3_cos", "maj3_sin", "maj3_cos"],
@@ -281,10 +410,10 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Set resolution for onset strength time-series.")]
+    #[tool(description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Set resolution for onset strength time-series. Use start_time/end_time to zoom into a specific section.")]
     fn rhythm_analysis(&self, Parameters(params): Parameters<RhythmParams>) -> String {
-        match load_and_analyse(&params.path, None, None) {
-            Ok((_audio, spectrogram)) => {
+        match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
+            Ok(AnalysisInput { audio: _audio, spectrogram, time_offset }) => {
                 let analysis = rhythm::analyse_rhythm(&spectrogram, params.min_bpm, params.max_bpm);
 
                 let mut result = format!(
@@ -301,7 +430,7 @@ impl AudioAnalyzerServer {
 
                 if !analysis.beat_times.is_empty() {
                     let show = analysis.beat_times.len().min(20);
-                    let beats: Vec<String> = analysis.beat_times[..show].iter().map(|t| format!("{:.2}s", t)).collect();
+                    let beats: Vec<String> = analysis.beat_times[..show].iter().map(|t| format!("{:.2}s", t + time_offset)).collect();
                     result.push_str(&format!("\nFirst {} beats: {}", show, beats.join(", ")));
                 }
 
@@ -309,7 +438,8 @@ impl AudioAnalyzerServer {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
                             let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
-                            let ds_onset = downsample::downsample_f32(&analysis.onset_envelope, fps, target_fps);
+                            let mut ds_onset = downsample::downsample_f32(&analysis.onset_envelope, fps, target_fps);
+                            offset_times(&mut ds_onset, time_offset);
                             result.push_str(&downsample::format_f32_series(
                                 "Onset Strength Over Time",
                                 &["onset_strength"],
@@ -326,12 +456,12 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Full picture in one call. Set resolution for all time-series data.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Full picture in one call. Set resolution for all time-series data. Use start_time/end_time to zoom into a specific section.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
-        match load_and_analyse(&params.path, None, None) {
-            Ok((audio, spectrogram)) => {
+        match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
+            Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
                 let centroid = spectral::spectral_centroid(&spectrogram);
                 let bandwidth = spectral::spectral_bandwidth(&spectrogram);
                 let rolloff = spectral::spectral_rolloff(&spectrogram, None);
@@ -380,10 +510,17 @@ impl AudioAnalyzerServer {
 
                 let elapsed = start.elapsed();
 
+                let section_info = if time_offset > 0.0 || params.start_time.is_some() || params.end_time.is_some() {
+                    let end_t = time_offset + audio.duration as f32;
+                    format!("Section: {:.1}s–{:.1}s | ", time_offset, end_t)
+                } else {
+                    String::new()
+                };
+
                 let mut result = format!(
                     "═══ Full Audio Analysis ═══\n\
                      File: {}\n\
-                     Duration: {:.2} sec | Sample rate: {} Hz | Samples: {}\n\
+                     {}Duration: {:.2} sec | Sample rate: {} Hz | Samples: {}\n\
                      Analysis completed in: {:.2?}\n\n\
                      ── Spectral/Temporal Features ──\n\
                      Centroid (brightness):  {:.0} Hz — {}\n\
@@ -396,7 +533,7 @@ impl AudioAnalyzerServer {
                      ── Harmonic Content ──\n\
                      Estimated key: {} {} (confidence: {:.3})\n\
                      Top pitch classes:\n",
-                    params.path, audio.duration, audio.sample_rate, audio.len(), elapsed,
+                    params.path, section_info, audio.duration, audio.sample_rate, audio.len(), elapsed,
                     avg(&centroid),
                     if avg(&centroid) > 3000.0 { "bright" } else if avg(&centroid) > 1500.0 { "moderate" } else { "warm/dark" },
                     avg(&bandwidth),
@@ -451,24 +588,46 @@ impl AudioAnalyzerServer {
                         Ok(target_fps) => {
                             let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
 
-                            let ds_centroid = downsample::downsample_f32(&centroid, fps, target_fps);
-                            let ds_bandwidth = downsample::downsample_f32(&bandwidth, fps, target_fps);
-                            let ds_rolloff = downsample::downsample_f32(&rolloff, fps, target_fps);
-                            let ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
-                            let ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
-                            let ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
-                            let ds_onset = downsample::downsample_f32(&rhythm_result.onset_envelope, fps, target_fps);
-                            let ds_perc_ratio = downsample::downsample_f32(&perc_feats.percussive_ratio, fps, target_fps);
-                            let ds_attack = downsample::downsample_f32(&perc_feats.attack_sharpness, fps, target_fps);
-                            let ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
-                            let ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
-                            let ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
+                            let mut ds_centroid = downsample::downsample_f32(&centroid, fps, target_fps);
+                            let mut ds_bandwidth = downsample::downsample_f32(&bandwidth, fps, target_fps);
+                            let mut ds_rolloff = downsample::downsample_f32(&rolloff, fps, target_fps);
+                            let mut ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
+                            let mut ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
+                            let mut ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
+                            let mut ds_onset = downsample::downsample_f32(&rhythm_result.onset_envelope, fps, target_fps);
+                            let mut ds_perc_ratio = downsample::downsample_f32(&perc_feats.percussive_ratio, fps, target_fps);
+                            let mut ds_attack = downsample::downsample_f32(&perc_feats.attack_sharpness, fps, target_fps);
+                            let mut ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
+                            let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
+                            let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
+
+                            offset_times(&mut ds_centroid, time_offset);
+                            offset_times(&mut ds_bandwidth, time_offset);
+                            offset_times(&mut ds_rolloff, time_offset);
+                            offset_times(&mut ds_flatness, time_offset);
+                            offset_times(&mut ds_rms, time_offset);
+                            offset_times(&mut ds_zcr, time_offset);
+                            offset_times(&mut ds_onset, time_offset);
+                            offset_times(&mut ds_perc_ratio, time_offset);
+                            offset_times(&mut ds_attack, time_offset);
+                            offset_times(&mut ds_density, time_offset);
+                            offset_times_array(&mut ds_chroma, time_offset);
+                            offset_times_array(&mut ds_tonnetz, time_offset);
 
                             let chroma_cols: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
                             let tonnetz_cols: &[&str] = &["fifth_sin", "fifth_cos", "min3_sin", "min3_cos", "maj3_sin", "maj3_cos"];
 
+                            // Use the minimum length across all series — the chromagram
+                            // uses a larger internal FFT (n_fft=8192) so it can produce
+                            // fewer frames than the spectrogram, leading to fewer
+                            // downsampled points. Without this, indexing out of bounds
+                            // panics the tokio task and silently hangs the MCP response.
+                            let n_points = ds_centroid.len()
+                                .min(ds_chroma.len())
+                                .min(ds_tonnetz.len());
+
                             result.push_str(&downsample::format_unified_timeseries(
-                                ds_centroid.len(),
+                                n_points,
                                 &[
                                     (&["centroid_hz"], &ds_centroid[..]),
                                     (&["bandwidth_hz"], &ds_bandwidth[..]),
@@ -508,7 +667,19 @@ impl ServerHandler for AudioAnalyzerServer {
                 "Audio analysis server for examining music files. \
                  Provides tools for spectral features, harmonic analysis \
                  (key detection, pitch classes), and rhythm analysis \
-                 (tempo, beats). Pass absolute file paths to the tools."
+                 (tempo, beats). Pass absolute file paths to the tools.\n\n\
+                 Recommended workflow for long tracks (>3 min): start with \
+                 full_analysis at \"low\" resolution for an overview, identify \
+                 sections of interest (breakdowns, drops, transitions, problem \
+                 areas), then call again with start_time/end_time and \"high\" \
+                 resolution to zoom in on specific sections. This saves tokens \
+                 while giving detailed insight where it matters.\n\n\
+                 Key detection uses Krumhansl-Schmuckler profiles which only \
+                 know major and minor modes. For modal music (dorian, mixolydian, \
+                 etc.), the detected key will be the closest major/minor relative — \
+                 check the pitch class distribution for the actual tonal centre. \
+                 Tempo detection can report half or double time on electronic music \
+                 and solo instruments."
             )
     }
 }
