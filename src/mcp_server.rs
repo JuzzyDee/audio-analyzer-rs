@@ -232,7 +232,7 @@ fn offset_times_array<const N: usize>(series: &mut [(f32, [f32; N])], offset: f3
 #[tool_router]
 impl AudioAnalyzerServer {
 
-    #[tool(description = "Get basic information about an audio file (duration, sample rate, sample count). Use this first to understand what you're working with.")]
+    #[tool(description = "Get basic information about an audio file (duration, sample rate, sample count). Quick and cheap — use this first to confirm the file is readable and see how long it is before running heavier analysis.")]
     fn audio_info(&self, Parameters(params): Parameters<AudioInfoParams>) -> String {
         match load_audio(&params.path) {
             Ok(audio) => {
@@ -245,7 +245,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Set resolution for time-series data. Use start_time/end_time to zoom into a specific section.")]
+    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
         match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
@@ -331,7 +331,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships. Essential for understanding melody, chords, and harmony. Set resolution for time-series data. Use start_time/end_time to zoom into a specific section.")]
+    #[tool(description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships (tonnetz). Essential for understanding melody, chords, and harmony. Note: key detection uses major/minor profiles only — for modal music, check the pitch class distribution for the actual tonal centre. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn harmonic_analysis(&self, Parameters(params): Parameters<HarmonicParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
@@ -410,7 +410,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Set resolution for onset strength time-series. Use start_time/end_time to zoom into a specific section.")]
+    #[tool(description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Tempo detection may report half/double time on electronic music or solo instruments — use min_bpm/max_bpm to constrain if needed. Omit resolution for a quick summary; set resolution='low' for onset strength overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn rhythm_analysis(&self, Parameters(params): Parameters<RhythmParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio: _audio, spectrogram, time_offset }) => {
@@ -456,7 +456,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Full picture in one call. Set resolution for all time-series data. Use start_time/end_time to zoom into a specific section.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
