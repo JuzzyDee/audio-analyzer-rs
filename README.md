@@ -173,6 +173,10 @@ Two binaries share the same analysis library:
 
 Key dependencies: [symphonia](https://github.com/pdeljanov/Symphonia) (audio decoding), [rustfft](https://github.com/ejmahler/RustFFT) (FFT), [rmcp](https://github.com/anthropics/rmcp) (MCP SDK).
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
 ## License
 
 Non-commercial use only. Free for personal, educational, and research purposes. Commercial use requires a separate license -- see [LICENSE](LICENSE) for details.
