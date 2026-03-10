@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "audio-analyzer",
   "display_name": "Audio Analyzer",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Give Claude the ability to hear music. Analyzes audio files for key, tempo, dynamics, timbre, and structure — all from raw DSP, no images, no guessing.",
   "long_description": "Audio Analyzer runs real audio analysis — the same DSP techniques used in music information retrieval research — and returns structured numerical data that Claude can reason about. Point Claude at any audio file (mp3, wav, flac, ogg, aac) and it can tell you the key, tempo, dynamics, timbre, and how the music evolves over time. Full analysis of a 60-second track completes in ~150-230ms. Pure Rust, no external dependencies.\n\nFeatures:\n- Spectral analysis: brightness, richness, rolloff, tonality\n- Temporal features: loudness (RMS), texture (zero crossing rate)\n- Timbre: 13 MFCCs (Mel-frequency cepstral coefficients)\n- Harmonic analysis: key detection, pitch class distribution, tonnetz\n- Rhythm analysis: tempo estimation, beat tracking, onset detection\n- Time-series data: track how every feature evolves over time at selectable resolution",
   "author": {

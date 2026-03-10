@@ -36,7 +36,7 @@ build_bundle() {
     mkdir -p "$staging/server"
 
     # Copy manifest and update version
-    sed "s/\"0.3.0\"/\"$VERSION\"/" "$SCRIPT_DIR/manifest.json" > "$staging/manifest.json"
+    sed "s/\"0.3.1\"/\"$VERSION\"/" "$SCRIPT_DIR/manifest.json" > "$staging/manifest.json"
 
     # Extract binary from archive
     if [[ "$archive" == *.zip ]]; then

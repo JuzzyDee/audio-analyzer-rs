@@ -90,7 +90,7 @@ fn main() {
     println!("Computing harmonic analysis...");
     let start = Instant::now();
 
-    let chromagram = harmonic::compute_chromagram(&spectrogram);
+    let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
     let tonnetz = harmonic::compute_tonnetz(&chromagram);
 
     let harmonic_time = start.elapsed();

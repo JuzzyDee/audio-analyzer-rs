@@ -161,10 +161,11 @@ fn correlate(chroma: &[f32; 12], profile: &[f32; 12], shift: usize) -> f32 {
     let mut denom_p = 0.0_f32;
 
     for i in 0..12 {
-        // `(i + shift) % 12` rotates the profile index.
-        // The `%` operator is modulo — same as Python.
+        // `(12 + i - shift) % 12` rotates the profile so that profile[0]
+        // (the tonic weight) aligns with chroma[shift]. This way, when
+        // shift=2 (D), the tonic weight lands on chroma index 2.
         let c = chroma[i] - mean_c;
-        let p = profile[(i + shift) % 12] - mean_p;
+        let p = profile[(12 + i - shift) % 12] - mean_p;
         numerator += c * p;
         denom_c += c * c;
         denom_p += p * p;
@@ -178,46 +179,54 @@ fn correlate(chroma: &[f32; 12], profile: &[f32; 12], shift: usize) -> f32 {
     }
 }
 
-/// Compute the chromagram from a spectrogram.
+/// Compute the chromagram from raw audio samples.
 ///
-/// Maps each frequency bin to its nearest pitch class and accumulates
-/// the energy. This is the "chroma" representation — octave-independent
-/// pitch content over time.
+/// Uses a high-resolution FFT (n_fft=8192) internally for accurate pitch
+/// class mapping. With the standard n_fft=2048, FFT bins at low frequencies
+/// are wider than a semitone (~23 Hz/bin at 48kHz), causing notes like G to
+/// be misclassified as F# because the bin centre frequency rounds down.
+/// With n_fft=8192 the resolution is ~5.9 Hz/bin, which properly resolves
+/// semitones down to ~60 Hz.
+///
+/// The `spectrogram` parameter is used only for time-axis alignment — the
+/// output chromagram has the same number of frames and hop length.
 ///
 /// Python equivalent: librosa.feature.chroma_stft()
-pub fn compute_chromagram(spectrogram: &Spectrogram) -> Chromagram {
-    // Pre-compute the pitch class mapping for each frequency bin.
-    // This maps each FFT bin's centre frequency to one of the 12 pitch classes.
-    //
-    // The formula: MIDI note = 12 × log2(freq / 440) + 69
-    // Then: pitch class = MIDI note % 12
-    //
-    // We compute this once and reuse it for every frame — a simple
-    // optimisation that avoids redundant log2 calls.
+pub fn compute_chromagram(
+    samples: &[f32],
+    sample_rate: u32,
+    spectrogram: &Spectrogram,
+) -> Chromagram {
+    // Compute a high-resolution spectrogram for accurate chroma mapping.
+    // We use n_fft=8192 for ~5.9 Hz/bin resolution at 48kHz, enough to
+    // resolve semitones across the full musical range. The hop length
+    // matches the original spectrogram so frames align.
+    let chroma_n_fft: usize = 8192;
+    let hires_spec = super::spectral::compute_spectrogram(
+        samples,
+        sample_rate,
+        Some(chroma_n_fft),
+        Some(spectrogram.hop_length),
+    );
 
-    // `Vec<Option<usize>>` — each bin maps to either Some(pitch_class_index)
-    // or None (for bins below our minimum frequency threshold).
-    let bin_to_chroma: Vec<Option<usize>> = (0..spectrogram.n_freq_bins)
+    // Pre-compute the pitch class mapping for each frequency bin.
+    let bin_to_chroma: Vec<Option<usize>> = (0..hires_spec.n_freq_bins)
         .map(|bin| {
-            let freq = spectrogram.bin_to_freq(bin);
+            let freq = hires_spec.bin_to_freq(bin);
             if freq < 20.0 {
-                // Below human hearing range / too low for reliable pitch
                 None
             } else {
                 // Convert frequency to MIDI note number, then to pitch class.
                 // A4 (440 Hz) = MIDI note 69. Each semitone is a factor of 2^(1/12).
                 let midi = 12.0 * (freq / 440.0).log2() + 69.0;
                 let pitch_class = ((midi.round() as i32) % 12 + 12) % 12;
-                // The `+ 12) % 12` handles negative modulo — Rust's `%` can
-                // return negative values for negative inputs (like C), unlike
-                // Python's `%` which always returns non-negative.
                 Some(pitch_class as usize)
             }
         })
         .collect();
 
-    // Compute chroma for each frame
-    let chroma: Vec<[f32; 12]> = spectrogram
+    // Compute chroma for each frame using the high-res spectrogram
+    let hires_chroma: Vec<[f32; 12]> = hires_spec
         .magnitudes
         .iter()
         .map(|frame| {
@@ -230,8 +239,6 @@ pub fn compute_chromagram(spectrogram: &Spectrogram) -> Chromagram {
             }
 
             // Normalise so the max value is 1.0 (within each frame).
-            // This prevents loud sections from dominating and makes
-            // the chroma comparable across time.
             let max_val = chroma_frame
                 .iter()
                 .cloned()
@@ -247,7 +254,10 @@ pub fn compute_chromagram(spectrogram: &Spectrogram) -> Chromagram {
         })
         .collect();
 
-    let n_frames = chroma.len();
+    // The high-res spectrogram may have a slightly different frame count
+    // due to the larger window. Use whichever is shorter to stay aligned.
+    let n_frames = hires_chroma.len().min(spectrogram.n_frames);
+    let chroma = hires_chroma[..n_frames].to_vec();
 
     Chromagram {
         chroma,
@@ -336,7 +346,7 @@ mod tests {
         // A 440 Hz sine wave should light up the "A" pitch class (index 9)
         let samples = sine_wave(440.0, 44100, 1.0);
         let spec = compute_spectrogram(&samples, 44100, None, None);
-        let chroma = compute_chromagram(&spec);
+        let chroma = compute_chromagram(&samples, 44100, &spec);
 
         assert!(chroma.n_frames > 0);
 
@@ -355,13 +365,46 @@ mod tests {
         // C4 = 261.63 Hz — should map to "C" pitch class (index 0)
         let samples = sine_wave(261.63, 44100, 1.0);
         let spec = compute_spectrogram(&samples, 44100, None, None);
-        let chroma = compute_chromagram(&spec);
+        let chroma = compute_chromagram(&samples, 44100, &spec);
 
         let mid = chroma.n_frames / 2;
         let (dominant, _) = chroma.dominant_pitch(mid);
         assert_eq!(
             dominant, "C",
             "261.63 Hz should map to C, got {}",
+            dominant
+        );
+    }
+
+    #[test]
+    fn test_chromagram_g_note() {
+        // G3 = 196 Hz — this was the bug: at n_fft=2048/48kHz, G mapped to F#
+        // because bin 8 (187.5 Hz) rounds to MIDI 54 (F#). The high-res FFT fixes this.
+        let samples = sine_wave(196.0, 48000, 1.0);
+        let spec = compute_spectrogram(&samples, 48000, None, None);
+        let chroma = compute_chromagram(&samples, 48000, &spec);
+
+        let mid = chroma.n_frames / 2;
+        let (dominant, _) = chroma.dominant_pitch(mid);
+        assert_eq!(
+            dominant, "G",
+            "196 Hz should map to G, got {}",
+            dominant
+        );
+    }
+
+    #[test]
+    fn test_chromagram_g_note_48k() {
+        // G4 at 48kHz — verify across octaves
+        let samples = sine_wave(392.0, 48000, 1.0);
+        let spec = compute_spectrogram(&samples, 48000, None, None);
+        let chroma = compute_chromagram(&samples, 48000, &spec);
+
+        let mid = chroma.n_frames / 2;
+        let (dominant, _) = chroma.dominant_pitch(mid);
+        assert_eq!(
+            dominant, "G",
+            "392 Hz should map to G, got {}",
             dominant
         );
     }
@@ -388,7 +431,7 @@ mod tests {
             .collect();
 
         let spec = compute_spectrogram(&samples, sr, None, None);
-        let chroma = compute_chromagram(&spec);
+        let chroma = compute_chromagram(&samples, sr, &spec);
         let (key, mode, score) = chroma.estimate_key();
 
         println!("Estimated key: {} {} (score: {:.3})", key, mode, score);
@@ -404,7 +447,7 @@ mod tests {
     fn test_tonnetz_shape() {
         let samples = sine_wave(440.0, 44100, 0.5);
         let spec = compute_spectrogram(&samples, 44100, None, None);
-        let chroma = compute_chromagram(&spec);
+        let chroma = compute_chromagram(&samples, 44100, &spec);
         let tonnetz = compute_tonnetz(&chroma);
 
         // Should have same number of frames as chromagram
@@ -414,12 +457,15 @@ mod tests {
     }
 
     #[test]
-    fn test_chromagram_frame_count_matches() {
+    fn test_chromagram_frame_count() {
         let samples = sine_wave(440.0, 44100, 1.0);
         let spec = compute_spectrogram(&samples, 44100, None, None);
-        let chroma = compute_chromagram(&spec);
+        let chroma = compute_chromagram(&samples, 44100, &spec);
 
-        // Chromagram should have same number of frames as spectrogram
-        assert_eq!(chroma.n_frames, spec.n_frames);
+        // The high-res FFT (n_fft=8192) may produce fewer frames than the
+        // original spectrogram (n_fft=2048) because it needs more samples
+        // before the first frame. The chromagram uses min(hires, spec) frames.
+        assert!(chroma.n_frames > 0);
+        assert!(chroma.n_frames <= spec.n_frames);
     }
 }

@@ -207,8 +207,8 @@ impl AudioAnalyzerServer {
     #[tool(description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships. Essential for understanding melody, chords, and harmony. Set resolution for time-series data.")]
     fn harmonic_analysis(&self, Parameters(params): Parameters<HarmonicParams>) -> String {
         match load_and_analyse(&params.path, None, None) {
-            Ok((_audio, spectrogram)) => {
-                let chromagram = harmonic::compute_chromagram(&spectrogram);
+            Ok((audio, spectrogram)) => {
+                let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
                 let tonnetz = harmonic::compute_tonnetz(&chromagram);
                 let (key, mode, confidence) = chromagram.estimate_key();
 
@@ -354,7 +354,7 @@ impl AudioAnalyzerServer {
                     *val /= mfcc_n;
                 }
 
-                let chromagram = harmonic::compute_chromagram(&spectrogram);
+                let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
                 let tonnetz = harmonic::compute_tonnetz(&chromagram);
                 let (key, mode, key_confidence) = chromagram.estimate_key();
 
