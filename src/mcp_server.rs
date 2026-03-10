@@ -245,7 +245,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
         match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
@@ -253,6 +253,7 @@ impl AudioAnalyzerServer {
                 let bandwidth = spectral::spectral_bandwidth(&spectrogram);
                 let rolloff = spectral::spectral_rolloff(&spectrogram, None);
                 let flatness = spectral::spectral_flatness(&spectrogram);
+                let bands = spectral::frequency_band_energy(&spectrogram);
                 let rms = temporal::rms_energy(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
                 let zcr = temporal::zero_crossing_rate(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
                 let mfccs = spectral::compute_mfccs(&spectrogram, None, None);
@@ -274,6 +275,21 @@ impl AudioAnalyzerServer {
                     .map(|(i, &v)| format!("MFCC-{}: {:.2}", i, v))
                     .collect();
 
+                // Average band energies for summary
+                let mut avg_bands = [0.0_f32; 7];
+                for frame in &bands.band_energies {
+                    for (i, &val) in frame.iter().enumerate() {
+                        avg_bands[i] += val;
+                    }
+                }
+                for val in &mut avg_bands {
+                    *val /= bands.n_frames as f32;
+                }
+                let band_names = spectral::FREQUENCY_BANDS;
+                let band_summary: Vec<String> = band_names.iter().enumerate()
+                    .map(|(i, &(name, lo, hi))| format!("{} ({:.0}–{:.0} Hz): {:.6}", name, lo, hi, avg_bands[i]))
+                    .collect();
+
                 let mut result = format!(
                     "Spectral Analysis: {}\n\
                      Duration: {:.2} sec | Frames: {} | Freq bins: {}\n\n\
@@ -283,7 +299,8 @@ impl AudioAnalyzerServer {
                      Flatness (tonality):       avg {:.4} — {}\n\
                      RMS Energy (loudness):     avg {:.4}\n\
                      Zero Crossing Rate:        avg {:.4} — {}\n\
-                     MFCCs (timbre):            {}\n",
+                     MFCCs (timbre):            {}\n\
+                     \nFrequency Band Energy:\n  {}\n",
                     params.path,
                     spectrogram.duration(), spectrogram.n_frames, spectrogram.n_freq_bins,
                     avg(&centroid),
@@ -297,6 +314,7 @@ impl AudioAnalyzerServer {
                     avg(&zcr),
                     if avg(&zcr) > 0.1 { "percussive/noisy" } else if avg(&zcr) > 0.03 { "mixed" } else { "tonal" },
                     mfcc_summary.join(", "),
+                    band_summary.join("\n  "),
                 );
 
                 if let Some(ref res) = params.resolution {
@@ -309,16 +327,24 @@ impl AudioAnalyzerServer {
                             let mut ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
                             let mut ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
                             let mut ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
+                            let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
                             offset_times(&mut ds_centroid, time_offset);
                             offset_times(&mut ds_bandwidth, time_offset);
                             offset_times(&mut ds_rolloff, time_offset);
                             offset_times(&mut ds_flatness, time_offset);
                             offset_times(&mut ds_rms, time_offset);
                             offset_times(&mut ds_zcr, time_offset);
+                            offset_times_array(&mut ds_bands, time_offset);
                             result.push_str(&downsample::format_f32_series(
                                 "Spectral/Temporal Features Over Time",
                                 &["centroid_hz", "bandwidth_hz", "rolloff_hz", "flatness", "rms", "zcr"],
                                 &[&ds_centroid, &ds_bandwidth, &ds_rolloff, &ds_flatness, &ds_rms, &ds_zcr],
+                            ));
+                            let band_col_names: Vec<&str> = spectral::FREQUENCY_BANDS.iter().map(|&(name, _, _)| name).collect();
+                            result.push_str(&downsample::format_array_series(
+                                "Frequency Band Energy Over Time",
+                                &band_col_names,
+                                &ds_bands,
                             ));
                         }
                         Err(e) => result.push_str(&format!("\n\nResolution error: {}", e)),
@@ -456,7 +482,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
@@ -466,6 +492,7 @@ impl AudioAnalyzerServer {
                 let bandwidth = spectral::spectral_bandwidth(&spectrogram);
                 let rolloff = spectral::spectral_rolloff(&spectrogram, None);
                 let flatness = spectral::spectral_flatness(&spectrogram);
+                let bands = spectral::frequency_band_energy(&spectrogram);
                 let rms = temporal::rms_energy(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
                 let zcr = temporal::zero_crossing_rate(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
                 let mfccs = spectral::compute_mfccs(&spectrogram, None, None);
@@ -482,6 +509,17 @@ impl AudioAnalyzerServer {
                 let mfcc_n = mfccs.len() as f32;
                 for val in &mut avg_mfcc {
                     *val /= mfcc_n;
+                }
+
+                // Average band energies for summary
+                let mut avg_bands = [0.0_f32; 7];
+                for frame in &bands.band_energies {
+                    for (i, &val) in frame.iter().enumerate() {
+                        avg_bands[i] += val;
+                    }
+                }
+                for val in &mut avg_bands {
+                    *val /= bands.n_frames as f32;
                 }
 
                 let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
@@ -530,6 +568,14 @@ impl AudioAnalyzerServer {
                      RMS Energy (loudness):  {:.4}\n\
                      Zero Crossing Rate:     {:.4} — {}\n\
                      MFCCs (timbre):         [{}]\n\n\
+                     ── Frequency Band Energy ──\n\
+                     Sub bass  (20–60 Hz):     {:.6}\n\
+                     Bass      (60–250 Hz):    {:.6}\n\
+                     Low-mid   (250–500 Hz):   {:.6}\n\
+                     Mid       (500–2k Hz):    {:.6}\n\
+                     Upper-mid (2k–4k Hz):     {:.6}\n\
+                     Presence  (4k–6k Hz):     {:.6}\n\
+                     Brilliance(6k–20k Hz):    {:.6}\n\n\
                      ── Harmonic Content ──\n\
                      Estimated key: {} {} (confidence: {:.3})\n\
                      Top pitch classes:\n",
@@ -545,6 +591,8 @@ impl AudioAnalyzerServer {
                     avg(&zcr),
                     if avg(&zcr) > 0.1 { "percussive/noisy" } else if avg(&zcr) > 0.03 { "mixed" } else { "tonal" },
                     avg_mfcc.iter().map(|v| format!("{:.1}", v)).collect::<Vec<_>>().join(", "),
+                    avg_bands[0], avg_bands[1], avg_bands[2], avg_bands[3],
+                    avg_bands[4], avg_bands[5], avg_bands[6],
                     key, mode, key_confidence,
                 );
 
@@ -600,6 +648,7 @@ impl AudioAnalyzerServer {
                             let mut ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
                             let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
                             let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
+                            let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
 
                             offset_times(&mut ds_centroid, time_offset);
                             offset_times(&mut ds_bandwidth, time_offset);
@@ -613,9 +662,11 @@ impl AudioAnalyzerServer {
                             offset_times(&mut ds_density, time_offset);
                             offset_times_array(&mut ds_chroma, time_offset);
                             offset_times_array(&mut ds_tonnetz, time_offset);
+                            offset_times_array(&mut ds_bands, time_offset);
 
                             let chroma_cols: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
                             let tonnetz_cols: &[&str] = &["fifth_sin", "fifth_cos", "min3_sin", "min3_cos", "maj3_sin", "maj3_cos"];
+                            let band_cols: Vec<&str> = spectral::FREQUENCY_BANDS.iter().map(|&(name, _, _)| name).collect();
 
                             // Use the minimum length across all series — the chromagram
                             // uses a larger internal FFT (n_fft=8192) so it can produce
@@ -624,7 +675,8 @@ impl AudioAnalyzerServer {
                             // panics the tokio task and silently hangs the MCP response.
                             let n_points = ds_centroid.len()
                                 .min(ds_chroma.len())
-                                .min(ds_tonnetz.len());
+                                .min(ds_tonnetz.len())
+                                .min(ds_bands.len());
 
                             result.push_str(&downsample::format_unified_timeseries(
                                 n_points,
@@ -642,6 +694,7 @@ impl AudioAnalyzerServer {
                                 ],
                                 Some((&ds_chroma, chroma_cols)),
                                 Some((&ds_tonnetz, tonnetz_cols)),
+                                Some((&ds_bands, &band_cols)),
                             ));
                         }
                         Err(e) => result.push_str(&format!("\n\nResolution error: {}", e)),
@@ -665,7 +718,8 @@ impl ServerHandler for AudioAnalyzerServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
                 "Audio analysis server for examining music files. \
-                 Provides tools for spectral features, harmonic analysis \
+                 Provides tools for spectral features (including frequency \
+                 band energy for mix diagnosis), harmonic analysis \
                  (key detection, pitch classes), and rhythm analysis \
                  (tempo, beats). Pass absolute file paths to the tools.\n\n\
                  Recommended workflow for long tracks (>3 min): start with \

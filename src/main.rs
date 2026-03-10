@@ -84,6 +84,25 @@ fn main() {
     println!("  Spectral Bandwidth:  avg {:.0} Hz (richness)", avg(&bandwidth));
     println!("  Spectral Rolloff:    avg {:.0} Hz (energy concentration)", avg(&rolloff));
     println!("  Spectral Flatness:   avg {:.4} (0=tonal, 1=noisy)", avg(&flatness));
+
+    let bands = spectral::frequency_band_energy(&spectrogram);
+    let band_names = spectral::FREQUENCY_BANDS;
+    let mut avg_bands = [0.0_f32; 7];
+    for frame in &bands.band_energies {
+        for (i, &val) in frame.iter().enumerate() {
+            avg_bands[i] += val;
+        }
+    }
+    for val in &mut avg_bands {
+        *val /= bands.n_frames as f32;
+    }
+    println!("  Frequency Band Energy:");
+    for (i, &(name, lo, hi)) in band_names.iter().enumerate() {
+        let bar_len = (avg_bands[i] * 500.0) as usize;
+        let bar: String = "█".repeat(bar_len.min(40));
+        println!("    {:<12} ({:>5.0}–{:>5.0} Hz): {:.6} {}", name, lo, hi, avg_bands[i], bar);
+    }
+
     println!("  Computed in:         {:.2?}\n", features_time);
 
     // --- Step 4: Harmonic analysis ---

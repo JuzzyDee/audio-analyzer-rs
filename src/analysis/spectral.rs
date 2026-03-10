@@ -484,6 +484,69 @@ pub fn compute_mfccs(
         .collect()
 }
 
+/// Standard frequency bands for mix analysis.
+///
+/// These map to how producers and mix engineers think about the spectrum:
+/// sub bass (rumble), bass (body), low-mids (mud/warmth), mids (vocals/presence),
+/// upper-mids (clarity/harshness), presence (detail/air), brilliance (sparkle).
+pub const FREQUENCY_BANDS: &[(&str, f32, f32)] = &[
+    ("sub_bass",   20.0,    60.0),
+    ("bass",       60.0,   250.0),
+    ("low_mid",   250.0,   500.0),
+    ("mid",       500.0,  2000.0),
+    ("upper_mid", 2000.0,  4000.0),
+    ("presence",  4000.0,  6000.0),
+    ("brilliance",6000.0, 20000.0),
+];
+
+/// Result of frequency band energy analysis.
+#[derive(Debug)]
+pub struct BandEnergy {
+    /// Energy per band per frame: band_energies[frame][band_index]
+    /// Band indices correspond to FREQUENCY_BANDS order.
+    pub band_energies: Vec<[f32; 7]>,
+    /// Number of frames
+    pub n_frames: usize,
+}
+
+/// Compute energy in standard frequency bands for each frame.
+///
+/// Returns the RMS energy within each band per frame, giving a breakdown
+/// of where the energy lives in the spectrum. Essential for identifying
+/// mix issues like muddy low-mids, harsh upper-mids, or missing brilliance.
+pub fn frequency_band_energy(spectrogram: &Spectrogram) -> BandEnergy {
+    // Pre-compute bin ranges for each band
+    let band_bins: Vec<(usize, usize)> = FREQUENCY_BANDS
+        .iter()
+        .map(|&(_, lo, hi)| {
+            let lo_bin = (lo * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            let hi_bin = (hi * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            (lo_bin.max(0).min(spectrogram.n_freq_bins), hi_bin.max(0).min(spectrogram.n_freq_bins))
+        })
+        .collect();
+
+    let band_energies: Vec<[f32; 7]> = spectrogram
+        .magnitudes
+        .iter()
+        .map(|frame| {
+            let mut energies = [0.0_f32; 7];
+            for (band_idx, &(lo, hi)) in band_bins.iter().enumerate() {
+                if lo >= hi {
+                    continue;
+                }
+                let sum_sq: f32 = frame[lo..hi].iter().map(|&m| m * m).sum();
+                energies[band_idx] = (sum_sq / (hi - lo) as f32).sqrt();
+            }
+            energies
+        })
+        .collect();
+
+    BandEnergy {
+        n_frames: band_energies.len(),
+        band_energies,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,6 +684,61 @@ mod tests {
             "Pure sine and composite should have different MFCCs, total diff was {:.3}",
             diff
         );
+    }
+
+    #[test]
+    fn test_band_energy_shape() {
+        let samples = sine_wave(440.0, 44100, 1.0);
+        let spec = compute_spectrogram(&samples, 44100, None, None);
+        let bands = frequency_band_energy(&spec);
+
+        assert_eq!(bands.n_frames, spec.n_frames);
+        assert_eq!(bands.band_energies.len(), spec.n_frames);
+        assert_eq!(bands.band_energies[0].len(), 7);
+    }
+
+    #[test]
+    fn test_band_energy_sine_concentration() {
+        // 440 Hz sine should concentrate energy in the "bass" band (60-250 Hz)
+        // or "low_mid" band (250-500 Hz) — 440 Hz falls in low_mid
+        let samples = sine_wave(440.0, 44100, 1.0);
+        let spec = compute_spectrogram(&samples, 44100, None, None);
+        let bands = frequency_band_energy(&spec);
+
+        let mid_frame = &bands.band_energies[bands.n_frames / 2];
+        // Band 2 = low_mid (250-500 Hz) should have the most energy
+        let low_mid_energy = mid_frame[2];
+        // All other bands should be lower
+        for (i, &energy) in mid_frame.iter().enumerate() {
+            if i != 2 {
+                assert!(
+                    low_mid_energy > energy,
+                    "440 Hz sine: low_mid band should dominate, but band {} ({:.6}) >= low_mid ({:.6})",
+                    i, energy, low_mid_energy
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_band_energy_high_sine() {
+        // 5000 Hz sine should concentrate in the "presence" band (4000-6000 Hz)
+        let samples = sine_wave(5000.0, 44100, 1.0);
+        let spec = compute_spectrogram(&samples, 44100, None, None);
+        let bands = frequency_band_energy(&spec);
+
+        let mid_frame = &bands.band_energies[bands.n_frames / 2];
+        // Band 5 = presence (4000-6000 Hz)
+        let presence_energy = mid_frame[5];
+        for (i, &energy) in mid_frame.iter().enumerate() {
+            if i != 5 {
+                assert!(
+                    presence_energy > energy,
+                    "5000 Hz sine: presence band should dominate, but band {} ({:.6}) >= presence ({:.6})",
+                    i, energy, presence_energy
+                );
+            }
+        }
     }
 
     #[test]
