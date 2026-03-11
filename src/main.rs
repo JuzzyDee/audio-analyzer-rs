@@ -104,6 +104,23 @@ fn main() {
         println!("    {:<12} ({:>5.0}–{:>5.0} Hz): {:.6} {}", name, lo, hi, avg_bands[i], bar);
     }
 
+    let sc = spectral::spectral_contrast(&spectrogram, None);
+    let mut avg_contrast = [0.0_f32; 7];
+    for frame in &sc.contrast {
+        for (i, &val) in frame.iter().enumerate() {
+            avg_contrast[i] += val;
+        }
+    }
+    for val in &mut avg_contrast {
+        *val /= sc.n_frames as f32;
+    }
+    println!("  Spectral Contrast (peak–valley):");
+    for (i, &(name, lo, hi)) in band_names.iter().enumerate() {
+        let bar_len = (avg_contrast[i] / 2.0) as usize;
+        let bar: String = "█".repeat(bar_len.min(40));
+        println!("    {:<12} ({:>5.0}–{:>5.0} Hz): {:>5.1} dB {}", name, lo, hi, avg_contrast[i], bar);
+    }
+
     println!("  Computed in:         {:.2?}\n", features_time);
 
     // --- Step 4: Harmonic analysis ---

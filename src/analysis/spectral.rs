@@ -547,6 +547,99 @@ pub fn frequency_band_energy(spectrogram: &Spectrogram) -> BandEnergy {
     }
 }
 
+/// Result of spectral contrast analysis.
+#[derive(Debug)]
+pub struct SpectralContrast {
+    /// Contrast (peak - valley in dB) per band per frame: contrast[frame][band_index]
+    /// High values = clear tonal content; low values = dense/noisy.
+    pub contrast: Vec<[f32; 7]>,
+    /// Peak magnitude (in dB) per band per frame.
+    pub peaks: Vec<[f32; 7]>,
+    /// Valley magnitude (in dB) per band per frame.
+    pub valleys: Vec<[f32; 7]>,
+    /// Number of frames.
+    pub n_frames: usize,
+}
+
+/// Compute spectral contrast for standard frequency bands.
+///
+/// For each band in each frame, sorts the magnitudes and compares the mean of
+/// the top `alpha` fraction (peaks) vs the bottom `alpha` fraction (valleys).
+/// The contrast is the difference in dB — measuring how much the dominant
+/// frequencies stand out above the noise floor in each band.
+///
+/// High contrast = clear, defined tones (solo piano, clean guitar).
+/// Low contrast = dense, filled-in spectrum (distorted guitars, noise, full choir).
+///
+/// `alpha` controls what fraction of bins counts as peak/valley (default 0.2 = top/bottom 20%).
+///
+/// Python equivalent: librosa.feature.spectral_contrast()
+pub fn spectral_contrast(spectrogram: &Spectrogram, alpha: Option<f32>) -> SpectralContrast {
+    let alpha = alpha.unwrap_or(0.2);
+
+    // Pre-compute bin ranges for each band (same as frequency_band_energy)
+    let band_bins: Vec<(usize, usize)> = FREQUENCY_BANDS
+        .iter()
+        .map(|&(_, lo, hi)| {
+            let lo_bin = (lo * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            let hi_bin = (hi * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            (lo_bin.max(0).min(spectrogram.n_freq_bins), hi_bin.max(0).min(spectrogram.n_freq_bins))
+        })
+        .collect();
+
+    let n_frames = spectrogram.n_frames;
+    let mut contrast = Vec::with_capacity(n_frames);
+    let mut peaks = Vec::with_capacity(n_frames);
+    let mut valleys = Vec::with_capacity(n_frames);
+
+    // Reusable buffer for sorting within each band
+    let mut band_mags: Vec<f32> = Vec::new();
+
+    for frame in &spectrogram.magnitudes {
+        let mut frame_contrast = [0.0_f32; 7];
+        let mut frame_peaks = [0.0_f32; 7];
+        let mut frame_valleys = [0.0_f32; 7];
+
+        for (band_idx, &(lo, hi)) in band_bins.iter().enumerate() {
+            if lo >= hi {
+                continue;
+            }
+
+            // Collect and sort magnitudes in this band
+            band_mags.clear();
+            band_mags.extend_from_slice(&frame[lo..hi]);
+            band_mags.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+            let n_bins = band_mags.len();
+            let n_alpha = (n_bins as f32 * alpha).ceil() as usize;
+            let n_alpha = n_alpha.max(1).min(n_bins);
+
+            // Valley = mean of bottom alpha fraction
+            let valley_mean: f32 = band_mags[..n_alpha].iter().sum::<f32>() / n_alpha as f32;
+            // Peak = mean of top alpha fraction
+            let peak_mean: f32 = band_mags[n_bins - n_alpha..].iter().sum::<f32>() / n_alpha as f32;
+
+            let peak_db = 20.0 * peak_mean.max(1e-10).log10();
+            let valley_db = 20.0 * valley_mean.max(1e-10).log10();
+
+            frame_peaks[band_idx] = peak_db;
+            frame_valleys[band_idx] = valley_db;
+            frame_contrast[band_idx] = peak_db - valley_db;
+        }
+
+        contrast.push(frame_contrast);
+        peaks.push(frame_peaks);
+        valleys.push(frame_valleys);
+    }
+
+    SpectralContrast {
+        n_frames,
+        contrast,
+        peaks,
+        valleys,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,6 +829,55 @@ mod tests {
                     presence_energy > energy,
                     "5000 Hz sine: presence band should dominate, but band {} ({:.6}) >= presence ({:.6})",
                     i, energy, presence_energy
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_spectral_contrast_shape() {
+        let samples = sine_wave(440.0, 44100, 1.0);
+        let spec = compute_spectrogram(&samples, 44100, None, None);
+        let sc = spectral_contrast(&spec, None);
+
+        assert_eq!(sc.n_frames, spec.n_frames);
+        assert_eq!(sc.contrast.len(), spec.n_frames);
+        assert_eq!(sc.peaks.len(), spec.n_frames);
+        assert_eq!(sc.valleys.len(), spec.n_frames);
+    }
+
+    #[test]
+    fn test_spectral_contrast_sine_high_in_band() {
+        // A pure 440 Hz sine should have high contrast in its band (low_mid)
+        // because there's a strong peak with near-silence elsewhere in the band
+        let samples = sine_wave(440.0, 44100, 1.0);
+        let spec = compute_spectrogram(&samples, 44100, None, None);
+        let sc = spectral_contrast(&spec, None);
+
+        let mid_frame = &sc.contrast[sc.n_frames / 2];
+        let low_mid_contrast = mid_frame[2]; // band 2 = low_mid (250-500 Hz)
+
+        // Pure tone in band = big difference between peak and valley
+        assert!(
+            low_mid_contrast > 20.0,
+            "440 Hz sine should have high contrast in low_mid band, got {:.1} dB",
+            low_mid_contrast
+        );
+    }
+
+    #[test]
+    fn test_spectral_contrast_non_negative() {
+        // Contrast should always be >= 0 (peaks >= valleys by definition)
+        let samples = sine_wave(440.0, 44100, 1.0);
+        let spec = compute_spectrogram(&samples, 44100, None, None);
+        let sc = spectral_contrast(&spec, None);
+
+        for frame in &sc.contrast {
+            for &val in frame {
+                assert!(
+                    val >= 0.0,
+                    "Spectral contrast should be non-negative, got {:.2}",
+                    val
                 );
             }
         }

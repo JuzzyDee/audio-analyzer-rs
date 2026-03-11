@@ -234,6 +234,7 @@ pub fn format_unified_timeseries(
     chroma_data: Option<(&[(f32, [f32; 12])], &[&str])>,
     tonnetz_data: Option<(&[(f32, [f32; 6])], &[&str])>,
     band_data: Option<(&[(f32, [f32; 7])], &[&str])>,
+    contrast_data: Option<(&[(f32, [f32; 7])], &[&str])>,
 ) -> String {
     if n_points == 0 {
         return String::new();
@@ -243,7 +244,8 @@ pub fn format_unified_timeseries(
     let total_cols: usize = f32_series.iter().map(|(cols, _)| cols.len()).sum::<usize>()
         + if chroma_data.is_some() { 12 } else { 0 }
         + if tonnetz_data.is_some() { 6 } else { 0 }
-        + if band_data.is_some() { 7 } else { 0 };
+        + if band_data.is_some() { 7 } else { 0 }
+        + if contrast_data.is_some() { 7 } else { 0 };
     let mut out = String::with_capacity(n_points * (total_cols * 8 + 10) + 200);
 
     writeln!(out, "\n── Time-Series Data ({} points) ──", n_points).unwrap();
@@ -269,6 +271,12 @@ pub fn format_unified_timeseries(
         }
     }
     if let Some((_, cols)) = band_data {
+        for col in cols {
+            out.push('\t');
+            out.push_str(col);
+        }
+    }
+    if let Some((_, cols)) = contrast_data {
         for col in cols {
             out.push('\t');
             out.push_str(col);
@@ -309,6 +317,14 @@ pub fn format_unified_timeseries(
             for val in &data[i].1 {
                 out.push('\t');
                 write!(out, "{:.3}", val).unwrap();
+            }
+        }
+
+        // Spectral contrast columns (7)
+        if let Some((data, _)) = contrast_data {
+            for val in &data[i].1 {
+                out.push('\t');
+                write!(out, "{:.1}", val).unwrap();
             }
         }
 
@@ -436,6 +452,7 @@ mod tests {
             2,
             &[(&["centroid"], &centroid), (&["flatness"], &flatness)],
             Some((&chroma, &chroma_col_refs)),
+            None,
             None,
             None,
         );
