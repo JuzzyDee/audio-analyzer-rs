@@ -858,7 +858,10 @@ impl ServerHandler for AudioAnalyzerServer {
                  band energy for mix diagnosis, spectral contrast for \
                  clarity analysis, and dynamic range), harmonic analysis \
                  (key detection, pitch classes), and rhythm analysis \
-                 (tempo, beats). Pass absolute file paths to the tools.\n\n\
+                 (tempo, beats). Pass absolute file paths to the tools. \
+                 This server reads files directly from the local filesystem — \
+                 do not ask the user to upload files. Instead, ask them for \
+                 the file path on their machine.\n\n\
                  Recommended workflow for long tracks (>3 min): start with \
                  full_analysis at \"low\" resolution for an overview, identify \
                  sections of interest (breakdowns, drops, transitions, problem \
