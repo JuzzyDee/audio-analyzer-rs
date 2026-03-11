@@ -179,4 +179,4 @@ See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## License
 
-Non-commercial use only. Free for personal, educational, and research purposes. Commercial use requires a separate license -- see [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
