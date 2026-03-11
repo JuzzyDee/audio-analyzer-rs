@@ -16,6 +16,9 @@ Full analysis of a 60-second track completes in under 2 seconds (including sourc
 
 - **Audio decoding** -- mp3, wav, flac, ogg, aac via Symphonia (pure Rust)
 - **Spectral analysis** -- centroid (brightness), bandwidth (richness), rolloff, flatness (tonality)
+- **Frequency band energy** -- RMS energy across 7 standard producer bands (sub-bass through brilliance) for mix diagnosis
+- **Spectral contrast** -- peak vs valley per band in dB, reveals clarity vs muddiness
+- **Dynamic range** -- crest factor, loudness range (95th-5th percentile), peak dBFS
 - **Temporal features** -- RMS energy (loudness), zero crossing rate (texture)
 - **Timbre** -- 13 MFCCs (Mel-frequency cepstral coefficients)
 - **Harmonic analysis** -- chromagram, key detection (Krumhansl-Schmuckler algorithm), tonnetz
@@ -81,51 +84,74 @@ Once configured, Claude can call these tools directly:
 | Tool | What it does |
 |------|-------------|
 | `audio_info` | Basic file info: duration, sample rate, sample count |
-| `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs) |
+| `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs), frequency band energy, spectral contrast, dynamic range |
 | `harmonic_analysis` | Key detection, pitch class distribution, tonnetz |
 | `rhythm_analysis` | Tempo (BPM), beat positions, tempo stability |
 | `full_analysis` | Everything above in one call, plus percussive character (HPSS) |
 
 ### Example: full_analysis output
 
-Here's what `full_analysis` returns for a 58-second jazz piano trio track:
+Here's what `full_analysis` returns for a 60-second jazz trio track:
 
 ```
 ═══ Full Audio Analysis ═══
-File: /music/bill_evans_waltz_for_debby.mp3
-Duration: 58.24 sec | Sample rate: 44100 Hz | Samples: 2568264
-Analysis completed in: 187.43ms
+File: /music/jazz_trio.mp3
+Duration: 60.62 sec | Sample rate: 48000 Hz | Samples: 2909952
+Analysis completed in: 2.02s
 
 ── Spectral/Temporal Features ──
-Centroid (brightness):  1847 Hz — moderate
-Bandwidth (richness):   1923 Hz — moderate
-Rolloff (energy focus): 4102 Hz
-Flatness (tonality):    0.0312 — strongly tonal
-RMS Energy (loudness):  0.0873
-Zero Crossing Rate:     0.0421 — mixed
-MFCCs (timbre):         [-312.4, 78.2, -15.7, 22.1, -8.4, 5.9, -3.2, 1.8, -2.1, 0.9, -1.4, 0.6, -0.3]
+Centroid (brightness):  2812 Hz — moderate
+Bandwidth (richness):   3933 Hz — complex
+Rolloff (energy focus): 6489 Hz
+Flatness (tonality):    0.0824 — strongly tonal
+RMS Energy (loudness):  0.1160
+Zero Crossing Rate:     0.0402 — mixed
+MFCCs (timbre):         [-141.3, 13.7, 0.9, 7.7, -2.5, 3.1, -1.7, 2.3, -0.9, 1.0, -0.5, 0.9, 0.6]
+
+── Frequency Band Energy ──
+Sub bass  (20–60 Hz):     0.007803
+Bass      (60–250 Hz):    0.013043
+Low-mid   (250–500 Hz):   0.004906
+Mid       (500–2k Hz):    0.002165
+Upper-mid (2k–4k Hz):     0.000203
+Presence  (4k–6k Hz):     0.000166
+Brilliance(6k–20k Hz):    0.000089
+
+── Spectral Contrast (peak–valley dB) ──
+Sub bass  (20–60 Hz):     10.4
+Bass      (60–250 Hz):    20.4
+Low-mid   (250–500 Hz):   26.0
+Mid       (500–2k Hz):    30.9
+Upper-mid (2k–4k Hz):     19.4
+Presence  (4k–6k Hz):     16.6
+Brilliance(6k–20k Hz):    55.2
 
 ── Harmonic Content ──
-Estimated key: F major (confidence: 0.782)
+Estimated key: E minor (confidence: 0.538)
 Top pitch classes:
-   1. F  0.847 █████████████████████
-   2. A  0.713 █████████████████
-   3. C  0.698 █████████████████
-   4. A# 0.524 █████████████
-   5. D  0.481 ████████████
-   6. G  0.439 ██████████
+   1. G  0.627 ███████████████
+   2. E  0.561 ██████████████
+   3. C  0.512 ████████████
+   4. D# 0.495 ████████████
+   5. F# 0.487 ████████████
+   6. C# 0.459 ███████████
 
 ── Rhythm ──
-Tempo: 138.2 BPM (confidence: 0.614)
-Beats detected: 134
-Mean tempo: 137.8 BPM | Median: 138.1 BPM
-Stability: 0.721 (0=free, 1=locked)
+Tempo: 84.0 BPM (confidence: 0.316)
+Beats detected: 69
+Mean tempo: 84.3 BPM | Median: 84.0 BPM
+Stability: 0.951 (0=free, 1=locked)
 
 ── Percussive Character ──
-HPSS computed in: 1.24s (kernel: 15)
-Percussive ratio: 0.312 — mostly harmonic (piano-dominant)
-Onset density: 4.2/sec
-Peak attack sharpness: 0.847 at 23.4s
+Percussive ratio:    0.277 — harmony-dominated
+Onset density:       7.0/sec — very dense
+Peak attack sharp:   1.000
+
+── Dynamic Range ──
+Peak:            -0.44 dBFS
+Crest factor:    16.2 dB — very dynamic
+Loudness range:  76.4 dB — very dynamic
+Quiet sections:  -87.5 dBFS | Loud sections: -11.1 dBFS
 ```
 
 When you add `resolution: "medium"`, the output also includes a time-series table showing how every feature changes over the track's duration -- letting Claude see the intro build, the dynamic solo section, and the quiet outro.
@@ -142,7 +168,7 @@ All analysis tools accept an optional `resolution` parameter that controls time-
 
 You can also pass a numeric string (e.g., `"20"`) for custom rates.
 
-Without `resolution`, tools return summary statistics only (averages across the whole track). With it, you get a compact TSV table showing how features evolve over time -- centroid, RMS, chroma, onset strength, percussive ratio, attack sharpness, and more, all aligned to the same time axis.
+Without `resolution`, tools return summary statistics only (averages across the whole track). With it, you get a compact TSV table showing how features evolve over time -- centroid, RMS, dynamic range, chroma, onset strength, percussive ratio, band energy, spectral contrast, and more, all aligned to the same time axis.
 
 The presets are calibrated for token efficiency. A 3-minute track at `"medium"` resolution produces roughly 180 rows of data -- enough to track musical structure without blowing up the context window.
 
@@ -157,8 +183,8 @@ load_audio()          -- Symphonia decodes to mono f32 samples
     v
 compute_spectrogram() -- STFT via rustfft, produces time-frequency matrix
     |
-    +---> spectral.rs    -- centroid, bandwidth, rolloff, flatness, MFCCs
-    +---> temporal.rs    -- RMS energy, zero crossing rate
+    +---> spectral.rs    -- centroid, bandwidth, rolloff, flatness, MFCCs, band energy, contrast
+    +---> temporal.rs    -- RMS energy, zero crossing rate, dynamic range
     +---> harmonic.rs    -- chromagram, key detection, tonnetz
     +---> rhythm.rs      -- onset detection, tempo, beat tracking
     +---> percussive.rs  -- HPSS (source separation), attack sharpness, onset density

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0] - 2026-03-11
+
+### Added
+- Frequency band energy analysis — RMS energy across 7 standard producer bands (sub-bass
+  through brilliance) for mix diagnosis. Available in summary, time-series, and unified table.
+- Spectral contrast — peak vs valley magnitude per band in dB, revealing clarity vs muddiness.
+  High contrast = clear tonal content; low contrast = dense/noisy. Summary + time-series.
+- Dynamic range analysis — crest factor (peak/RMS in dB), loudness range (95th-5th percentile
+  of RMS), peak dBFS. Per-frame crest factor in time-series for tracking dynamics over time.
+- Unified time-series table now has 47 columns (was 32).
+
+### Changed
+- License changed from non-commercial to MIT.
+
 ## [0.3.2] - 2026-03-10
 
 ### Fixed
