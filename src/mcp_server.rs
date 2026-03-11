@@ -226,6 +226,18 @@ fn offset_times_array<const N: usize>(series: &mut [(f32, [f32; N])], offset: f3
     }
 }
 
+/// Format the difference between measured LUFS and a platform target.
+fn format_platform_diff(measured: f32, target: f32) -> String {
+    let diff = measured - target;
+    if diff.abs() < 0.5 {
+        "on target".to_string()
+    } else if diff > 0.0 {
+        format!("down {:.1} dB", diff)
+    } else {
+        format!("up {:.1} dB", -diff)
+    }
+}
+
 // `#[tool_router]` collects all #[tool] methods and builds the routing table.
 // Notice the methods are NOT async — they're plain synchronous functions.
 // The rmcp framework handles the async wrapping.
@@ -245,7 +257,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
         match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
@@ -306,6 +318,7 @@ impl AudioAnalyzerServer {
                     .collect();
 
                 let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let lufs = temporal::measure_lufs(&audio.samples, audio.sample_rate);
 
                 let mut result = format!(
                     "Spectral Analysis: {}\n\
@@ -323,7 +336,12 @@ impl AudioAnalyzerServer {
                      Peak:            {:.2} dBFS\n\
                      Crest factor:    {:.1} dB — {}\n\
                      Loudness range:  {:.1} dB — {}\n\
-                     Quiet sections:  {:.1} dBFS | Loud sections: {:.1} dBFS\n",
+                     Quiet sections:  {:.1} dBFS | Loud sections: {:.1} dBFS\n\
+                     \n── Loudness (EBU R128) ──\n\
+                     Integrated:      {:.1} LUFS\n\
+                     True peak:       {:.1} dBTP\n\
+                     Loudness range:  {:.1} LU\n\
+                     Spotify (-14):   {} | Apple (-16): {} | YouTube (-14): {}\n",
                     params.path,
                     spectrogram.duration(), spectrogram.n_frames, spectrogram.n_freq_bins,
                     avg(&centroid),
@@ -345,6 +363,10 @@ impl AudioAnalyzerServer {
                     dr.loudness_range_db,
                     if dr.loudness_range_db > 12.0 { "very dynamic" } else if dr.loudness_range_db > 6.0 { "moderate" } else if dr.loudness_range_db > 3.0 { "compressed" } else { "brick-walled" },
                     dr.rms_5th_db, dr.rms_95th_db,
+                    lufs.integrated, lufs.true_peak_dbtp, lufs.loudness_range,
+                    format_platform_diff(lufs.integrated, -14.0),
+                    format_platform_diff(lufs.integrated, -16.0),
+                    format_platform_diff(lufs.integrated, -14.0),
                 );
 
                 if let Some(ref res) = params.resolution {
@@ -523,7 +545,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
@@ -600,6 +622,7 @@ impl AudioAnalyzerServer {
                 let perc_feats = percussive::percussive_features(&hpss_result, audio.sample_rate, spectrogram.hop_length);
 
                 let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let lufs = temporal::measure_lufs(&audio.samples, audio.sample_rate);
 
                 let elapsed = start.elapsed();
 
@@ -708,6 +731,19 @@ impl AudioAnalyzerServer {
                     dr.loudness_range_db,
                     if dr.loudness_range_db > 12.0 { "very dynamic" } else if dr.loudness_range_db > 6.0 { "moderate" } else if dr.loudness_range_db > 3.0 { "compressed" } else { "brick-walled" },
                     dr.rms_5th_db, dr.rms_95th_db,
+                ));
+
+                // LUFS loudness summary
+                result.push_str(&format!(
+                    "\n── Loudness (EBU R128) ──\n\
+                     Integrated:      {:.1} LUFS\n\
+                     True peak:       {:.1} dBTP\n\
+                     Loudness range:  {:.1} LU\n\
+                     Spotify (-14):   {} | Apple (-16): {} | YouTube (-14): {}\n",
+                    lufs.integrated, lufs.true_peak_dbtp, lufs.loudness_range,
+                    format_platform_diff(lufs.integrated, -14.0),
+                    format_platform_diff(lufs.integrated, -16.0),
+                    format_platform_diff(lufs.integrated, -14.0),
                 ));
 
                 // Append unified time-series table if resolution was requested

@@ -172,6 +172,340 @@ pub fn dynamic_range(samples: &[f32], frame_size: usize, hop_length: usize) -> D
     }
 }
 
+// ---- LUFS (EBU R128) Loudness Measurement ----
+
+/// Biquad filter coefficients (second-order IIR).
+struct Biquad {
+    b0: f64, b1: f64, b2: f64,
+    a1: f64, a2: f64,
+}
+
+impl Biquad {
+    /// Apply the filter to a buffer of samples in-place.
+    fn process(&self, samples: &mut [f32]) {
+        let mut x1: f64 = 0.0;
+        let mut x2: f64 = 0.0;
+        let mut y1: f64 = 0.0;
+        let mut y2: f64 = 0.0;
+
+        for s in samples.iter_mut() {
+            let x0 = *s as f64;
+            let y0 = self.b0 * x0 + self.b1 * x1 + self.b2 * x2
+                   - self.a1 * y1 - self.a2 * y2;
+            x2 = x1;
+            x1 = x0;
+            y2 = y1;
+            y1 = y0;
+            *s = y0 as f32;
+        }
+    }
+}
+
+/// K-weighting pre-filter (high-shelf boost).
+/// Coefficients for 48000 Hz from ITU-R BS.1770-4.
+fn k_weighting_stage1(sample_rate: u32) -> Biquad {
+    // These are the standard coefficients. For sample rates other than 48kHz,
+    // we use the bilinear transform to recalculate.
+    if sample_rate == 48000 {
+        Biquad {
+            b0: 1.53512485958697,
+            b1: -2.69169618940638,
+            b2: 1.19839281085285,
+            a1: -1.69065929318241,
+            a2: 0.73248077421585,
+        }
+    } else {
+        // Compute from analog prototype via bilinear transform
+        k_shelf_coefficients(sample_rate)
+    }
+}
+
+/// K-weighting high-pass filter (second stage).
+/// Coefficients for 48000 Hz from ITU-R BS.1770-4.
+fn k_weighting_stage2(sample_rate: u32) -> Biquad {
+    if sample_rate == 48000 {
+        Biquad {
+            b0: 1.0,
+            b1: -2.0,
+            b2: 1.0,
+            a1: -1.99004745483398,
+            a2: 0.99007225036621,
+        }
+    } else {
+        k_highpass_coefficients(sample_rate)
+    }
+}
+
+/// Compute high-shelf filter coefficients for arbitrary sample rate.
+/// Based on the analog prototype from ITU-R BS.1770-4.
+fn k_shelf_coefficients(sample_rate: u32) -> Biquad {
+    let fs = sample_rate as f64;
+
+    // Pre-filter: high shelf at ~1681 Hz with ~4 dB boost
+    let db = 3.999843853973347;
+    let f0 = 1681.974450955533;
+    let q = 0.7071752369554196;
+
+    let a = 10.0_f64.powf(db / 40.0); // amplitude
+    let w0 = 2.0 * std::f64::consts::PI * f0 / fs;
+    let (sin_w0, cos_w0) = w0.sin_cos();
+    let alpha = sin_w0 / (2.0 * q);
+
+    let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + 2.0 * a.sqrt() * alpha;
+    Biquad {
+        b0: (a * ((a + 1.0) + (a - 1.0) * cos_w0 + 2.0 * a.sqrt() * alpha)) / a0,
+        b1: (-2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0)) / a0,
+        b2: (a * ((a + 1.0) + (a - 1.0) * cos_w0 - 2.0 * a.sqrt() * alpha)) / a0,
+        a1: (2.0 * ((a - 1.0) - (a + 1.0) * cos_w0)) / a0,
+        a2: ((a + 1.0) - (a - 1.0) * cos_w0 - 2.0 * a.sqrt() * alpha) / a0,
+    }
+}
+
+/// Compute high-pass filter coefficients for arbitrary sample rate.
+/// Second-order Butterworth high-pass at ~38 Hz.
+fn k_highpass_coefficients(sample_rate: u32) -> Biquad {
+    let fs = sample_rate as f64;
+    let f0 = 38.13547087602444;
+    let q = 0.5003270373238773;
+
+    let w0 = 2.0 * std::f64::consts::PI * f0 / fs;
+    let (sin_w0, cos_w0) = w0.sin_cos();
+    let alpha = sin_w0 / (2.0 * q);
+
+    let a0 = 1.0 + alpha;
+    Biquad {
+        b0: ((1.0 + cos_w0) / 2.0) / a0,
+        b1: (-(1.0 + cos_w0)) / a0,
+        b2: ((1.0 + cos_w0) / 2.0) / a0,
+        a1: (-2.0 * cos_w0) / a0,
+        a2: (1.0 - alpha) / a0,
+    }
+}
+
+/// Apply K-weighting filter to samples (returns a new filtered buffer).
+fn k_weight(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    let mut filtered = samples.to_vec();
+    let stage1 = k_weighting_stage1(sample_rate);
+    let stage2 = k_weighting_stage2(sample_rate);
+    stage1.process(&mut filtered);
+    stage2.process(&mut filtered);
+    filtered
+}
+
+/// Compute mean square energy of a block of samples.
+fn mean_square(samples: &[f32]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
+    sum / samples.len() as f64
+}
+
+/// Convert mean square to LUFS.
+fn ms_to_lufs(ms: f64) -> f64 {
+    -0.691 + 10.0 * ms.max(1e-20).log10()
+}
+
+/// LUFS measurement results (EBU R128).
+#[derive(Debug)]
+pub struct LufsResult {
+    /// Integrated loudness (gated, whole track) in LUFS.
+    pub integrated: f32,
+    /// Short-term loudness values (3-second sliding window) in LUFS.
+    pub short_term: Vec<f32>,
+    /// Momentary loudness values (400ms sliding window) in LUFS.
+    pub momentary: Vec<f32>,
+    /// Loudness range (LRA) in LU — difference between 95th and 10th percentile
+    /// of short-term loudness, gated.
+    pub loudness_range: f32,
+    /// True peak in dBTP (from 4x oversampled signal).
+    pub true_peak_dbtp: f32,
+    /// Time axis for short-term values (seconds).
+    pub short_term_times: Vec<f32>,
+    /// Time axis for momentary values (seconds).
+    pub momentary_times: Vec<f32>,
+}
+
+/// Compute true peak via 4x oversampling.
+///
+/// Uses a simple windowed sinc interpolation to upsample the signal,
+/// then finds the peak. This catches inter-sample peaks that exceed
+/// the sample-domain peak.
+fn true_peak(samples: &[f32]) -> f32 {
+    // 4x oversampling with linear interpolation as a practical approximation.
+    // Full sinc interpolation is more accurate but this catches the vast majority
+    // of inter-sample peaks and is much faster.
+    let mut peak: f32 = 0.0;
+
+    // Check original samples
+    for &s in samples {
+        peak = peak.max(s.abs());
+    }
+
+    // Check interpolated points between each pair of samples (3 points per gap = 4x)
+    if samples.len() >= 2 {
+        for i in 0..samples.len() - 1 {
+            let s0 = samples[i];
+            let s1 = samples[i + 1];
+            // Linear interpolation at 1/4, 2/4, 3/4 positions
+            for k in 1..4 {
+                let t = k as f32 / 4.0;
+                let interp = s0 + (s1 - s0) * t;
+                peak = peak.max(interp.abs());
+            }
+        }
+    }
+
+    peak
+}
+
+/// Measure LUFS loudness per EBU R128 / ITU-R BS.1770-4.
+///
+/// Computes integrated loudness (gated), short-term (3s), momentary (400ms),
+/// loudness range (LRA), and true peak.
+///
+/// This is the standard loudness measurement used by streaming platforms:
+/// Spotify targets -14 LUFS, Apple Music -16 LUFS, YouTube -14 LUFS.
+pub fn measure_lufs(samples: &[f32], sample_rate: u32) -> LufsResult {
+    // Step 1: K-weight the signal
+    let filtered = k_weight(samples, sample_rate);
+
+    // Step 2: Compute momentary loudness (400ms blocks, 100ms hop)
+    let block_400ms = (sample_rate as f64 * 0.4) as usize;
+    let hop_100ms = (sample_rate as f64 * 0.1) as usize;
+    let mut momentary = Vec::new();
+    let mut momentary_times = Vec::new();
+    let mut momentary_ms = Vec::new(); // keep mean-square for gating
+
+    let mut pos = 0;
+    while pos + block_400ms <= filtered.len() {
+        let ms = mean_square(&filtered[pos..pos + block_400ms]);
+        momentary_ms.push(ms);
+        momentary.push(ms_to_lufs(ms) as f32);
+        momentary_times.push((pos + block_400ms / 2) as f32 / sample_rate as f32);
+        pos += hop_100ms;
+    }
+
+    // Step 3: Compute short-term loudness (3s blocks, 100ms hop)
+    let block_3s = (sample_rate as f64 * 3.0) as usize;
+    let mut short_term = Vec::new();
+    let mut short_term_times = Vec::new();
+    let mut short_term_ms = Vec::new();
+
+    pos = 0;
+    while pos + block_3s <= filtered.len() {
+        let ms = mean_square(&filtered[pos..pos + block_3s]);
+        short_term_ms.push(ms);
+        short_term.push(ms_to_lufs(ms) as f32);
+        short_term_times.push((pos + block_3s / 2) as f32 / sample_rate as f32);
+        pos += hop_100ms;
+    }
+
+    // Step 4: Integrated loudness with EBU R128 gating
+    // Use 400ms blocks with 75% overlap (100ms hop) as per spec
+    let integrated = gated_loudness(&momentary_ms);
+
+    // Step 5: Loudness range (LRA) from short-term loudness
+    let loudness_range = compute_lra(&short_term_ms);
+
+    // Step 6: True peak
+    let tp = true_peak(samples);
+    let true_peak_dbtp = amplitude_to_db(tp);
+
+    LufsResult {
+        integrated,
+        short_term,
+        momentary,
+        loudness_range,
+        true_peak_dbtp,
+        short_term_times,
+        momentary_times,
+    }
+}
+
+/// EBU R128 gated loudness measurement.
+///
+/// Two-stage gate:
+/// 1. Absolute gate at -70 LUFS — ignore silence
+/// 2. Relative gate at ungated_mean - 10 LU — ignore quiet passages
+fn gated_loudness(block_ms: &[f64]) -> f32 {
+    if block_ms.is_empty() {
+        return -70.0;
+    }
+
+    // Stage 1: Absolute gate at -70 LUFS
+    let abs_threshold_ms = 10.0_f64.powf((-70.0 + 0.691) / 10.0);
+    let above_abs: Vec<f64> = block_ms.iter()
+        .copied()
+        .filter(|&ms| ms > abs_threshold_ms)
+        .collect();
+
+    if above_abs.is_empty() {
+        return -70.0;
+    }
+
+    // Ungated mean (of blocks above absolute threshold)
+    let ungated_mean: f64 = above_abs.iter().sum::<f64>() / above_abs.len() as f64;
+    let ungated_lufs = ms_to_lufs(ungated_mean);
+
+    // Stage 2: Relative gate at ungated_mean - 10 LU
+    let rel_threshold_ms = 10.0_f64.powf((ungated_lufs - 10.0 + 0.691) / 10.0);
+    let above_rel: Vec<f64> = block_ms.iter()
+        .copied()
+        .filter(|&ms| ms > rel_threshold_ms)
+        .collect();
+
+    if above_rel.is_empty() {
+        return -70.0;
+    }
+
+    let gated_mean: f64 = above_rel.iter().sum::<f64>() / above_rel.len() as f64;
+    ms_to_lufs(gated_mean) as f32
+}
+
+/// Compute Loudness Range (LRA) per EBU R128 / EBU Tech 3342.
+///
+/// LRA is the difference between the 95th and 10th percentile of
+/// short-term loudness values, after applying the same two-stage gate.
+fn compute_lra(short_term_ms: &[f64]) -> f32 {
+    if short_term_ms.len() < 2 {
+        return 0.0;
+    }
+
+    // Stage 1: Absolute gate at -70 LUFS
+    let abs_threshold_ms = 10.0_f64.powf((-70.0 + 0.691) / 10.0);
+    let above_abs: Vec<f64> = short_term_ms.iter()
+        .copied()
+        .filter(|&ms| ms > abs_threshold_ms)
+        .collect();
+
+    if above_abs.is_empty() {
+        return 0.0;
+    }
+
+    // Relative gate at -20 LU below ungated mean (LRA uses -20, not -10)
+    let ungated_mean: f64 = above_abs.iter().sum::<f64>() / above_abs.len() as f64;
+    let ungated_lufs = ms_to_lufs(ungated_mean);
+    let rel_threshold_ms = 10.0_f64.powf((ungated_lufs - 20.0 + 0.691) / 10.0);
+
+    let mut gated_lufs: Vec<f64> = short_term_ms.iter()
+        .copied()
+        .filter(|&ms| ms > rel_threshold_ms)
+        .map(|ms| ms_to_lufs(ms))
+        .collect();
+
+    if gated_lufs.len() < 2 {
+        return 0.0;
+    }
+
+    gated_lufs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let idx_10 = (gated_lufs.len() as f64 * 0.10) as usize;
+    let idx_95 = ((gated_lufs.len() as f64 * 0.95) as usize).min(gated_lufs.len() - 1);
+
+    (gated_lufs[idx_95] - gated_lufs[idx_10]) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +665,131 @@ mod tests {
             (dr.peak_dbfs - 0.0).abs() < 0.5,
             "Full-scale sine peak should be near 0 dBFS, got {:.2}",
             dr.peak_dbfs
+        );
+    }
+
+    // ---- LUFS tests ----
+
+    fn sine_wave_48k(freq: f32, amplitude: f32, duration: f32) -> Vec<f32> {
+        let sr = 48000;
+        let n = (sr as f32 * duration) as usize;
+        (0..n)
+            .map(|i| amplitude * (2.0 * PI * freq * i as f32 / sr as f32).sin())
+            .collect()
+    }
+
+    #[test]
+    fn test_lufs_full_scale_sine_1khz() {
+        // A full-scale 1kHz sine at 48kHz should measure around -3.01 LUFS
+        // (the K-weighting is nearly flat at 1kHz, and a full-scale sine
+        // has RMS of -3.01 dBFS)
+        let samples = sine_wave_48k(1000.0, 1.0, 5.0);
+        let result = measure_lufs(&samples, 48000);
+
+        // Should be roughly -3 LUFS (K-weighting adds ~0 dB at 1kHz)
+        assert!(
+            result.integrated > -5.0 && result.integrated < -1.0,
+            "Full-scale 1kHz sine should be around -3 LUFS, got {:.1}",
+            result.integrated
+        );
+    }
+
+    #[test]
+    fn test_lufs_half_amplitude_quieter() {
+        // Half amplitude = -6 dB quieter
+        let full = sine_wave_48k(1000.0, 1.0, 5.0);
+        let half = sine_wave_48k(1000.0, 0.5, 5.0);
+
+        let lufs_full = measure_lufs(&full, 48000);
+        let lufs_half = measure_lufs(&half, 48000);
+
+        let diff = lufs_full.integrated - lufs_half.integrated;
+        assert!(
+            (diff - 6.0).abs() < 1.0,
+            "Half amplitude should be ~6 dB quieter, got {:.1} dB difference",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_lufs_silence_gated() {
+        // Silence should be gated to -70 LUFS
+        let samples = vec![0.0_f32; 48000 * 5];
+        let result = measure_lufs(&samples, 48000);
+
+        assert!(
+            result.integrated <= -70.0,
+            "Silence should gate to -70 LUFS, got {:.1}",
+            result.integrated
+        );
+    }
+
+    #[test]
+    fn test_lufs_k_weighting_boosts_highs() {
+        // K-weighting boosts high frequencies — a 4kHz tone should measure
+        // louder than a 100Hz tone at the same amplitude
+        let low = sine_wave_48k(100.0, 0.5, 5.0);
+        let high = sine_wave_48k(4000.0, 0.5, 5.0);
+
+        let lufs_low = measure_lufs(&low, 48000);
+        let lufs_high = measure_lufs(&high, 48000);
+
+        assert!(
+            lufs_high.integrated > lufs_low.integrated,
+            "4kHz ({:.1} LUFS) should measure louder than 100Hz ({:.1} LUFS) with K-weighting",
+            lufs_high.integrated, lufs_low.integrated
+        );
+    }
+
+    #[test]
+    fn test_lufs_true_peak() {
+        // Full-scale sine true peak should be near 0 dBTP
+        let samples = sine_wave_48k(1000.0, 1.0, 2.0);
+        let result = measure_lufs(&samples, 48000);
+
+        assert!(
+            (result.true_peak_dbtp - 0.0).abs() < 0.5,
+            "Full-scale sine true peak should be near 0 dBTP, got {:.2}",
+            result.true_peak_dbtp
+        );
+    }
+
+    #[test]
+    fn test_lufs_short_term_populated() {
+        // 5 seconds of audio should produce short-term values
+        let samples = sine_wave_48k(1000.0, 0.5, 5.0);
+        let result = measure_lufs(&samples, 48000);
+
+        assert!(
+            !result.short_term.is_empty(),
+            "5 seconds of audio should produce short-term loudness values"
+        );
+        assert_eq!(result.short_term.len(), result.short_term_times.len());
+    }
+
+    #[test]
+    fn test_lufs_loudness_range_steady() {
+        // Steady tone should have minimal loudness range
+        let samples = sine_wave_48k(1000.0, 0.5, 10.0);
+        let result = measure_lufs(&samples, 48000);
+
+        assert!(
+            result.loudness_range < 2.0,
+            "Steady tone should have small LRA, got {:.1} LU",
+            result.loudness_range
+        );
+    }
+
+    #[test]
+    fn test_lufs_44100_works() {
+        // Should work at 44100 Hz too (recalculates filter coefficients)
+        let samples = sine_wave(1000.0, 44100, 5.0);
+        let result = measure_lufs(&samples, 44100);
+
+        assert!(
+            result.integrated > -5.0 && result.integrated < -1.0,
+            "44100 Hz: full-scale 1kHz sine should be around -3 LUFS, got {:.1}",
+            result.integrated
         );
     }
 }

@@ -241,7 +241,39 @@ fn main() {
     println!("  Loud sections:   {:.1} dBFS (95th percentile)", dr.rms_95th_db);
     println!("  Computed in:     {:.2?}\n", dr_time);
 
+    // --- Step 8: LUFS loudness (EBU R128) ---
+    println!("Computing LUFS loudness (EBU R128)...");
+    let start = Instant::now();
+
+    let lufs = temporal::measure_lufs(&audio.samples, audio.sample_rate);
+    let lufs_time = start.elapsed();
+
+    println!("  Integrated:      {:.1} LUFS", lufs.integrated);
+    println!("  True peak:       {:.1} dBTP", lufs.true_peak_dbtp);
+    println!("  Loudness range:  {:.1} LU", lufs.loudness_range);
+
+    // Platform comparison
+    println!("  Platform targets:");
+    for &(name, target) in &[("Spotify", -14.0_f32), ("Apple Music", -16.0), ("YouTube", -14.0)] {
+        let diff = lufs.integrated - target;
+        if diff.abs() < 0.5 {
+            println!("    {:<13} {:.0} LUFS → on target", name, target);
+        } else if diff > 0.0 {
+            println!("    {:<13} {:.0} LUFS → turned DOWN {:.1} dB", name, target, diff);
+        } else {
+            println!("    {:<13} {:.0} LUFS → turned UP {:.1} dB (will sound quieter)", name, target, -diff);
+        }
+    }
+
+    if !lufs.short_term.is_empty() {
+        let min_st = lufs.short_term.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_st = lufs.short_term.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        println!("  Short-term:      {:.1} to {:.1} LUFS", min_st, max_st);
+    }
+
+    println!("  Computed in:     {:.2?}\n", lufs_time);
+
     // --- Summary ---
-    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time;
+    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time + lufs_time;
     println!("=== TOTAL: {:.2?} ===", total);
 }
