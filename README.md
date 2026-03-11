@@ -28,6 +28,10 @@ Full analysis of a 60-second track completes in under 2 seconds (including sourc
 - **Time-series data** -- track how every feature evolves over time at selectable resolution
 - **Token-efficient** -- downsampled output calibrated to fit comfortably in the context window
 
+## See it in action
+
+[Watch Claude analyse a jazz track and give production-grade mastering feedback](https://claude.ai/share/0fbcf214-e75b-4dbc-8e0f-f60c772acc58) — LUFS loudness, true peak headroom, streaming platform normalization, spectral balance, and mix advice, all from raw audio analysis.
+
 ## Installation
 
 ### Claude Desktop — one-click install
