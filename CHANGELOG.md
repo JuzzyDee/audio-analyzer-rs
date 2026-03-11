@@ -9,6 +9,9 @@
   High contrast = clear tonal content; low contrast = dense/noisy. Summary + time-series.
 - Dynamic range analysis — crest factor (peak/RMS in dB), loudness range (95th-5th percentile
   of RMS), peak dBFS. Per-frame crest factor in time-series for tracking dynamics over time.
+- LUFS loudness measurement (EBU R128 / ITU-R BS.1770-4) — K-weighted integrated loudness,
+  true peak (dBTP) via 4x oversampling, loudness range (LRA per EBU Tech 3342), and streaming
+  platform target comparison (Spotify/Apple Music/YouTube).
 - Unified time-series table now has 47 columns (was 32).
 
 ### Changed

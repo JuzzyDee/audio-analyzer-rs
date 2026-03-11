@@ -19,6 +19,7 @@ Full analysis of a 60-second track completes in under 2 seconds (including sourc
 - **Frequency band energy** -- RMS energy across 7 standard producer bands (sub-bass through brilliance) for mix diagnosis
 - **Spectral contrast** -- peak vs valley per band in dB, reveals clarity vs muddiness
 - **Dynamic range** -- crest factor, loudness range (95th-5th percentile), peak dBFS
+- **LUFS loudness** -- EBU R128 integrated loudness, true peak (dBTP), loudness range (LRA), streaming platform targets (Spotify/Apple/YouTube)
 - **Temporal features** -- RMS energy (loudness), zero crossing rate (texture)
 - **Timbre** -- 13 MFCCs (Mel-frequency cepstral coefficients)
 - **Harmonic analysis** -- chromagram, key detection (Krumhansl-Schmuckler algorithm), tonnetz
@@ -84,7 +85,7 @@ Once configured, Claude can call these tools directly:
 | Tool | What it does |
 |------|-------------|
 | `audio_info` | Basic file info: duration, sample rate, sample count |
-| `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs), frequency band energy, spectral contrast, dynamic range |
+| `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs), frequency band energy, spectral contrast, dynamic range, LUFS loudness |
 | `harmonic_analysis` | Key detection, pitch class distribution, tonnetz |
 | `rhythm_analysis` | Tempo (BPM), beat positions, tempo stability |
 | `full_analysis` | Everything above in one call, plus percussive character (HPSS) |
@@ -152,6 +153,15 @@ Peak:            -0.44 dBFS
 Crest factor:    16.2 dB — very dynamic
 Loudness range:  76.4 dB — very dynamic
 Quiet sections:  -87.5 dBFS | Loud sections: -11.1 dBFS
+
+── LUFS Loudness (EBU R128) ──
+Integrated:      -18.3 LUFS
+True peak:       -0.4 dBTP
+Loudness range:  8.2 LU
+Platform targets:
+  Spotify        -14 LUFS → turned UP 4.3 dB (will sound quieter)
+  Apple Music    -16 LUFS → turned UP 2.3 dB (will sound quieter)
+  YouTube        -14 LUFS → turned UP 4.3 dB (will sound quieter)
 ```
 
 When you add `resolution: "medium"`, the output also includes a time-series table showing how every feature changes over the track's duration -- letting Claude see the intro build, the dynamic solo section, and the quiet outro.
@@ -184,7 +194,7 @@ load_audio()          -- Symphonia decodes to mono f32 samples
 compute_spectrogram() -- STFT via rustfft, produces time-frequency matrix
     |
     +---> spectral.rs    -- centroid, bandwidth, rolloff, flatness, MFCCs, band energy, contrast
-    +---> temporal.rs    -- RMS energy, zero crossing rate, dynamic range
+    +---> temporal.rs    -- RMS energy, zero crossing rate, dynamic range, LUFS loudness
     +---> harmonic.rs    -- chromagram, key detection, tonnetz
     +---> rhythm.rs      -- onset detection, tempo, beat tracking
     +---> percussive.rs  -- HPSS (source separation), attack sharpness, onset density
