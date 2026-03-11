@@ -7,6 +7,7 @@ use audio_visualizer_rs::load_audio;
 use audio_visualizer_rs::analysis::spectral;
 use audio_visualizer_rs::analysis::harmonic;
 use audio_visualizer_rs::analysis::rhythm;
+use audio_visualizer_rs::analysis::temporal;
 use audio_visualizer_rs::analysis::percussive;
 
 fn main() {
@@ -198,7 +199,32 @@ fn main() {
     println!("  Peak attack sharp: {:.3}", max_sharpness);
     println!("  Computed in:       {:.2?}\n", perc_time);
 
+    // --- Step 7: Dynamic range ---
+    println!("Computing dynamic range...");
+    let start = Instant::now();
+
+    let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+    let dr_time = start.elapsed();
+
+    println!("  Peak:            {:.2} dBFS", dr.peak_dbfs);
+    println!("  Crest factor:    {:.1} dB — {}",
+        dr.overall_crest_db,
+        if dr.overall_crest_db > 12.0 { "very dynamic" }
+        else if dr.overall_crest_db > 6.0 { "healthy dynamics" }
+        else { "compressed" }
+    );
+    println!("  Loudness range:  {:.1} dB (95th–5th percentile) — {}",
+        dr.loudness_range_db,
+        if dr.loudness_range_db > 12.0 { "very dynamic" }
+        else if dr.loudness_range_db > 6.0 { "moderate" }
+        else if dr.loudness_range_db > 3.0 { "compressed" }
+        else { "brick-walled" }
+    );
+    println!("  Quiet sections:  {:.1} dBFS (5th percentile)", dr.rms_5th_db);
+    println!("  Loud sections:   {:.1} dBFS (95th percentile)", dr.rms_95th_db);
+    println!("  Computed in:     {:.2?}\n", dr_time);
+
     // --- Summary ---
-    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time;
+    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time;
     println!("=== TOTAL: {:.2?} ===", total);
 }

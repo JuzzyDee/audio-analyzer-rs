@@ -245,7 +245,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), dynamic range (crest factor, loudness range, peak dBFS), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
         match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
@@ -290,6 +290,8 @@ impl AudioAnalyzerServer {
                     .map(|(i, &(name, lo, hi))| format!("{} ({:.0}–{:.0} Hz): {:.6}", name, lo, hi, avg_bands[i]))
                     .collect();
 
+                let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+
                 let mut result = format!(
                     "Spectral Analysis: {}\n\
                      Duration: {:.2} sec | Frames: {} | Freq bins: {}\n\n\
@@ -300,7 +302,12 @@ impl AudioAnalyzerServer {
                      RMS Energy (loudness):     avg {:.4}\n\
                      Zero Crossing Rate:        avg {:.4} — {}\n\
                      MFCCs (timbre):            {}\n\
-                     \nFrequency Band Energy:\n  {}\n",
+                     \nFrequency Band Energy:\n  {}\n\
+                     \n── Dynamic Range ──\n\
+                     Peak:            {:.2} dBFS\n\
+                     Crest factor:    {:.1} dB — {}\n\
+                     Loudness range:  {:.1} dB — {}\n\
+                     Quiet sections:  {:.1} dBFS | Loud sections: {:.1} dBFS\n",
                     params.path,
                     spectrogram.duration(), spectrogram.n_frames, spectrogram.n_freq_bins,
                     avg(&centroid),
@@ -315,6 +322,12 @@ impl AudioAnalyzerServer {
                     if avg(&zcr) > 0.1 { "percussive/noisy" } else if avg(&zcr) > 0.03 { "mixed" } else { "tonal" },
                     mfcc_summary.join(", "),
                     band_summary.join("\n  "),
+                    dr.peak_dbfs,
+                    dr.overall_crest_db,
+                    if dr.overall_crest_db > 12.0 { "very dynamic" } else if dr.overall_crest_db > 6.0 { "healthy" } else { "compressed" },
+                    dr.loudness_range_db,
+                    if dr.loudness_range_db > 12.0 { "very dynamic" } else if dr.loudness_range_db > 6.0 { "moderate" } else if dr.loudness_range_db > 3.0 { "compressed" } else { "brick-walled" },
+                    dr.rms_5th_db, dr.rms_95th_db,
                 );
 
                 if let Some(ref res) = params.resolution {
@@ -327,6 +340,7 @@ impl AudioAnalyzerServer {
                             let mut ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
                             let mut ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
                             let mut ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
+                            let mut ds_crest = downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
                             let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
                             offset_times(&mut ds_centroid, time_offset);
                             offset_times(&mut ds_bandwidth, time_offset);
@@ -334,11 +348,12 @@ impl AudioAnalyzerServer {
                             offset_times(&mut ds_flatness, time_offset);
                             offset_times(&mut ds_rms, time_offset);
                             offset_times(&mut ds_zcr, time_offset);
+                            offset_times(&mut ds_crest, time_offset);
                             offset_times_array(&mut ds_bands, time_offset);
                             result.push_str(&downsample::format_f32_series(
                                 "Spectral/Temporal Features Over Time",
-                                &["centroid_hz", "bandwidth_hz", "rolloff_hz", "flatness", "rms", "zcr"],
-                                &[&ds_centroid, &ds_bandwidth, &ds_rolloff, &ds_flatness, &ds_rms, &ds_zcr],
+                                &["centroid_hz", "bandwidth_hz", "rolloff_hz", "flatness", "rms", "zcr", "crest_db"],
+                                &[&ds_centroid, &ds_bandwidth, &ds_rolloff, &ds_flatness, &ds_rms, &ds_zcr, &ds_crest],
                             ));
                             let band_col_names: Vec<&str> = spectral::FREQUENCY_BANDS.iter().map(|&(name, _, _)| name).collect();
                             result.push_str(&downsample::format_array_series(
@@ -482,7 +497,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, dynamic range), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
@@ -545,6 +560,8 @@ impl AudioAnalyzerServer {
 
                 let hpss_result = percussive::hpss(&spectrogram, None);
                 let perc_feats = percussive::percussive_features(&hpss_result, audio.sample_rate, spectrogram.hop_length);
+
+                let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
 
                 let elapsed = start.elapsed();
 
@@ -630,6 +647,21 @@ impl AudioAnalyzerServer {
                     max_sharpness,
                 ));
 
+                // Dynamic range summary
+                result.push_str(&format!(
+                    "\n── Dynamic Range ──\n\
+                     Peak:            {:.2} dBFS\n\
+                     Crest factor:    {:.1} dB — {}\n\
+                     Loudness range:  {:.1} dB — {}\n\
+                     Quiet sections:  {:.1} dBFS | Loud sections: {:.1} dBFS\n",
+                    dr.peak_dbfs,
+                    dr.overall_crest_db,
+                    if dr.overall_crest_db > 12.0 { "very dynamic" } else if dr.overall_crest_db > 6.0 { "healthy" } else { "compressed" },
+                    dr.loudness_range_db,
+                    if dr.loudness_range_db > 12.0 { "very dynamic" } else if dr.loudness_range_db > 6.0 { "moderate" } else if dr.loudness_range_db > 3.0 { "compressed" } else { "brick-walled" },
+                    dr.rms_5th_db, dr.rms_95th_db,
+                ));
+
                 // Append unified time-series table if resolution was requested
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
@@ -646,6 +678,7 @@ impl AudioAnalyzerServer {
                             let mut ds_perc_ratio = downsample::downsample_f32(&perc_feats.percussive_ratio, fps, target_fps);
                             let mut ds_attack = downsample::downsample_f32(&perc_feats.attack_sharpness, fps, target_fps);
                             let mut ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
+                            let mut ds_crest = downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
                             let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
                             let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
                             let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
@@ -660,6 +693,7 @@ impl AudioAnalyzerServer {
                             offset_times(&mut ds_perc_ratio, time_offset);
                             offset_times(&mut ds_attack, time_offset);
                             offset_times(&mut ds_density, time_offset);
+                            offset_times(&mut ds_crest, time_offset);
                             offset_times_array(&mut ds_chroma, time_offset);
                             offset_times_array(&mut ds_tonnetz, time_offset);
                             offset_times_array(&mut ds_bands, time_offset);
@@ -691,6 +725,7 @@ impl AudioAnalyzerServer {
                                     (&["perc_ratio"], &ds_perc_ratio[..]),
                                     (&["attack"], &ds_attack[..]),
                                     (&["density"], &ds_density[..]),
+                                    (&["crest_db"], &ds_crest[..]),
                                 ],
                                 Some((&ds_chroma, chroma_cols)),
                                 Some((&ds_tonnetz, tonnetz_cols)),

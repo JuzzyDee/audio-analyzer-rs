@@ -73,6 +73,105 @@ pub fn zero_crossing_rate(samples: &[f32], frame_size: usize, hop_length: usize)
     result
 }
 
+/// Dynamic range analysis results.
+#[derive(Debug)]
+pub struct DynamicRange {
+    /// Crest factor per frame: peak / RMS. Higher = more dynamic.
+    /// A sine wave is ~1.41 (sqrt(2)). A brick-walled master might be 1.1.
+    /// Heavily compressed music: < 4 dB. Dynamic classical: > 15 dB.
+    pub crest_factor_db: Vec<f32>,
+    /// Overall crest factor in dB (from global peak and global RMS).
+    pub overall_crest_db: f32,
+    /// Loudness range: difference between 95th and 5th percentile of RMS (in dB).
+    /// Captures how much the volume varies across the track.
+    /// < 3 dB = heavily compressed, 6-9 dB = typical pop/rock, > 12 dB = very dynamic.
+    pub loudness_range_db: f32,
+    /// 5th percentile RMS in dB (quiet sections).
+    pub rms_5th_db: f32,
+    /// 95th percentile RMS in dB (loud sections).
+    pub rms_95th_db: f32,
+    /// Peak amplitude (linear, 0.0 to 1.0).
+    pub peak_amplitude: f32,
+    /// Peak amplitude in dBFS (0 dBFS = digital maximum).
+    pub peak_dbfs: f32,
+}
+
+/// Convert a linear amplitude to dB, with a floor to avoid log(0).
+fn amplitude_to_db(amp: f32) -> f32 {
+    20.0 * amp.max(1e-10).log10()
+}
+
+/// Compute dynamic range analysis from raw audio samples.
+///
+/// Uses the same windowing as RMS/ZCR to stay on the shared time axis.
+/// Returns crest factor per frame, overall crest, and loudness range.
+pub fn dynamic_range(samples: &[f32], frame_size: usize, hop_length: usize) -> DynamicRange {
+    let rms = rms_energy(samples, frame_size, hop_length);
+
+    // Peak amplitude per frame
+    let n_frames = rms.len();
+    let mut crest_factor_db = Vec::with_capacity(n_frames);
+
+    for frame in 0..n_frames {
+        let start = frame * hop_length;
+        let end = start + frame_size;
+        let peak: f32 = samples[start..end]
+            .iter()
+            .map(|&s| s.abs())
+            .fold(0.0_f32, f32::max);
+
+        let rms_val = rms[frame];
+        if rms_val > 1e-10 {
+            crest_factor_db.push(amplitude_to_db(peak / rms_val));
+        } else {
+            crest_factor_db.push(0.0); // silence
+        }
+    }
+
+    // Global peak
+    let peak_amplitude = samples.iter().map(|&s| s.abs()).fold(0.0_f32, f32::max);
+    let peak_dbfs = amplitude_to_db(peak_amplitude);
+
+    // Global RMS
+    let global_rms = if !rms.is_empty() {
+        let sum_sq: f32 = rms.iter().map(|&r| r * r).sum();
+        (sum_sq / rms.len() as f32).sqrt()
+    } else {
+        0.0
+    };
+    let overall_crest_db = if global_rms > 1e-10 {
+        amplitude_to_db(peak_amplitude / global_rms)
+    } else {
+        0.0
+    };
+
+    // Loudness range: 95th - 5th percentile of RMS in dB
+    // Filter out silence (< -60 dB) to avoid skewing the range
+    let mut rms_db: Vec<f32> = rms.iter()
+        .filter(|&&r| r > 1e-10)
+        .map(|&r| amplitude_to_db(r))
+        .collect();
+    rms_db.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let (rms_5th_db, rms_95th_db, loudness_range_db) = if rms_db.len() >= 2 {
+        let idx_5 = (rms_db.len() as f32 * 0.05) as usize;
+        let idx_95 = ((rms_db.len() as f32 * 0.95) as usize).min(rms_db.len() - 1);
+        (rms_db[idx_5], rms_db[idx_95], rms_db[idx_95] - rms_db[idx_5])
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    DynamicRange {
+        crest_factor_db,
+        overall_crest_db,
+        loudness_range_db,
+        rms_5th_db,
+        rms_95th_db,
+        peak_amplitude,
+        peak_dbfs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +267,70 @@ mod tests {
         let samples = vec![0.0; 100];
         assert!(rms_energy(&samples, 2048, 512).is_empty());
         assert!(zero_crossing_rate(&samples, 2048, 512).is_empty());
+    }
+
+    #[test]
+    fn test_dynamic_range_sine() {
+        // Pure sine: crest factor should be ~3 dB (sqrt(2) = 1.414, 20*log10(1.414) ≈ 3.01)
+        let samples = sine_wave(440.0, 44100, 1.0);
+        let dr = dynamic_range(&samples, 2048, 512);
+
+        assert!(!dr.crest_factor_db.is_empty());
+        let avg_crest: f32 = dr.crest_factor_db.iter().sum::<f32>() / dr.crest_factor_db.len() as f32;
+        assert!(
+            (avg_crest - 3.01).abs() < 0.5,
+            "Sine crest factor should be ~3.01 dB, got {:.2} dB",
+            avg_crest
+        );
+        assert!((dr.overall_crest_db - 3.01).abs() < 0.5);
+    }
+
+    #[test]
+    fn test_dynamic_range_constant_loudness() {
+        // A continuous sine has minimal loudness variation
+        let samples = sine_wave(440.0, 44100, 2.0);
+        let dr = dynamic_range(&samples, 2048, 512);
+
+        // Loudness range should be very small (< 1 dB) for a steady tone
+        assert!(
+            dr.loudness_range_db < 1.0,
+            "Steady sine loudness range should be < 1 dB, got {:.2} dB",
+            dr.loudness_range_db
+        );
+    }
+
+    #[test]
+    fn test_dynamic_range_varying_loudness() {
+        // Build a signal that's quiet then loud — should have meaningful DR
+        let sr = 44100;
+        let quiet: Vec<f32> = (0..sr)
+            .map(|i| 0.1 * (2.0 * PI * 440.0 * i as f32 / sr as f32).sin())
+            .collect();
+        let loud: Vec<f32> = (0..sr)
+            .map(|i| 1.0 * (2.0 * PI * 440.0 * i as f32 / sr as f32).sin())
+            .collect();
+        let mut samples = quiet;
+        samples.extend(loud);
+
+        let dr = dynamic_range(&samples, 2048, 512);
+
+        // Should show ~20 dB range (amplitude ratio 10:1 = 20 dB)
+        assert!(
+            dr.loudness_range_db > 10.0,
+            "Quiet→loud signal should have > 10 dB range, got {:.2} dB",
+            dr.loudness_range_db
+        );
+    }
+
+    #[test]
+    fn test_peak_dbfs() {
+        // Full-scale sine (amplitude 1.0) should have peak near 0 dBFS
+        let samples = sine_wave(440.0, 44100, 0.5);
+        let dr = dynamic_range(&samples, 2048, 512);
+        assert!(
+            (dr.peak_dbfs - 0.0).abs() < 0.5,
+            "Full-scale sine peak should be near 0 dBFS, got {:.2}",
+            dr.peak_dbfs
+        );
     }
 }
