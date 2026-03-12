@@ -242,11 +242,26 @@ fn main() {
     println!("  Loud sections:   {:.1} dBFS (95th percentile)", dr.rms_95th_db);
     println!("  Computed in:     {:.2?}\n", dr_time);
 
-    // --- Step 8: LUFS loudness (EBU R128) ---
+    // --- Step 8: Stereo load (needed for correct LUFS and stereo analysis) ---
+    println!("Loading stereo channels...");
+    let start = Instant::now();
+
+    let stereo_audio = match load_audio_stereo(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  Stereo load failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let stereo_load_time = start.elapsed();
+    println!("  Loaded in:       {:.2?}\n", stereo_load_time);
+
+    // --- Step 9: LUFS loudness (EBU R128) ---
     println!("Computing LUFS loudness (EBU R128)...");
     let start = Instant::now();
 
-    let lufs = temporal::measure_lufs(&audio.samples, audio.sample_rate);
+    // Per ITU-R BS.1770-4: K-weight each channel independently, sum channel powers
+    let lufs = temporal::measure_lufs_stereo(&stereo_audio.left, &stereo_audio.right, audio.sample_rate);
     let lufs_time = start.elapsed();
 
     println!("  Integrated:      {:.1} LUFS", lufs.integrated);
@@ -274,17 +289,9 @@ fn main() {
 
     println!("  Computed in:     {:.2?}\n", lufs_time);
 
-    // --- Step 9: Stereo analysis ---
+    // --- Step 10: Stereo analysis ---
     println!("Computing stereo analysis...");
     let start = Instant::now();
-
-    let stereo_audio = match load_audio_stereo(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("  Stereo load failed: {}", e);
-            std::process::exit(1);
-        }
-    };
 
     let stereo_result = stereo::analyse_stereo(
         &stereo_audio.left,
@@ -300,6 +307,6 @@ fn main() {
     println!("  Computed in:     {:.2?}\n", stereo_time);
 
     // --- Summary ---
-    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time + lufs_time + stereo_time;
+    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time + stereo_load_time + lufs_time + stereo_time;
     println!("=== TOTAL: {:.2?} ===", total);
 }

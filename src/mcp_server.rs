@@ -344,7 +344,14 @@ impl AudioAnalyzerServer {
                     .collect();
 
                 let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
-                let lufs = temporal::measure_lufs(&audio.samples, audio.sample_rate);
+
+                // Load stereo for both LUFS (needs L/R per ITU-R BS.1770-4) and stereo analysis
+                let stereo_loaded = load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time).ok();
+                let lufs = if let Some((ref left, ref right, _)) = stereo_loaded {
+                    temporal::measure_lufs_stereo(left, right, audio.sample_rate)
+                } else {
+                    temporal::measure_lufs(&audio.samples, audio.sample_rate)
+                };
 
                 let mut result = format!(
                     "Spectral Analysis: {}\n\
@@ -396,17 +403,14 @@ impl AudioAnalyzerServer {
                 );
 
                 // Stereo analysis
-                match load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time) {
-                    Ok((left, right, channels)) => {
-                        let stereo_result = stereo::analyse_stereo(
-                            &left, &right, channels,
-                            spectrogram.n_fft, spectrogram.hop_length,
-                        );
-                        let stereo_sum = stereo::stereo_summary(&stereo_result);
-                        result.push_str("\n── Stereo Field ──\n");
-                        result.push_str(&stereo::format_stereo_summary(&stereo_sum, channels));
-                    }
-                    Err(_) => {} // silently skip if stereo load fails
+                if let Some((left, right, channels)) = stereo_loaded {
+                    let stereo_result = stereo::analyse_stereo(
+                        &left, &right, channels,
+                        spectrogram.n_fft, spectrogram.hop_length,
+                    );
+                    let stereo_sum = stereo::stereo_summary(&stereo_result);
+                    result.push_str("\n── Stereo Field ──\n");
+                    result.push_str(&stereo::format_stereo_summary(&stereo_sum, channels));
                 }
 
                 if let Some(ref res) = params.resolution {
@@ -662,7 +666,15 @@ impl AudioAnalyzerServer {
                 let perc_feats = percussive::percussive_features(&hpss_result, audio.sample_rate, spectrogram.hop_length);
 
                 let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
-                let lufs = temporal::measure_lufs(&audio.samples, audio.sample_rate);
+
+                // Load stereo early — needed for correct LUFS (ITU-R BS.1770-4 sums L/R power)
+                // and for stereo analysis + time-series
+                let stereo_loaded = load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time).ok();
+                let lufs = if let Some((ref left, ref right, _)) = stereo_loaded {
+                    temporal::measure_lufs_stereo(left, right, audio.sample_rate)
+                } else {
+                    temporal::measure_lufs(&audio.samples, audio.sample_rate)
+                };
 
                 let elapsed = start.elapsed();
 
@@ -786,9 +798,8 @@ impl AudioAnalyzerServer {
                     format_platform_diff(lufs.integrated, -14.0),
                 ));
 
-                // Stereo analysis — keep the per-frame result for time-series
-                let stereo_data = load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time)
-                    .ok()
+                // Stereo analysis — reuse the stereo data already loaded for LUFS
+                let stereo_data = stereo_loaded
                     .map(|(left, right, channels)| {
                         stereo::analyse_stereo(
                             &left, &right, channels,

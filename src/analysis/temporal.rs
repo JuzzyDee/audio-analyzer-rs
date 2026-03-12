@@ -423,6 +423,79 @@ pub fn measure_lufs(samples: &[f32], sample_rate: u32) -> LufsResult {
     }
 }
 
+/// Measure LUFS loudness per EBU R128 / ITU-R BS.1770-4 for stereo signals.
+///
+/// Per the spec, each channel is K-weighted independently, then channel powers
+/// are **summed** (not averaged) per measurement block. This is critical for
+/// correct loudness readings on stereo material — measuring a mono mixdown
+/// underreports by ~3-4 dB on wide stereo content.
+///
+/// True peak is the maximum across both channels.
+pub fn measure_lufs_stereo(left: &[f32], right: &[f32], sample_rate: u32) -> LufsResult {
+    assert_eq!(left.len(), right.len(), "L/R channels must be same length");
+
+    // Step 1: K-weight each channel independently
+    let filtered_l = k_weight(left, sample_rate);
+    let filtered_r = k_weight(right, sample_rate);
+
+    // Step 2: Compute momentary loudness (400ms blocks, 100ms hop)
+    // Per ITU-R BS.1770-4: sum mean-square across channels
+    let block_400ms = (sample_rate as f64 * 0.4) as usize;
+    let hop_100ms = (sample_rate as f64 * 0.1) as usize;
+    let mut momentary = Vec::new();
+    let mut momentary_times = Vec::new();
+    let mut momentary_ms = Vec::new();
+
+    let mut pos = 0;
+    while pos + block_400ms <= filtered_l.len() {
+        let ms_l = mean_square(&filtered_l[pos..pos + block_400ms]);
+        let ms_r = mean_square(&filtered_r[pos..pos + block_400ms]);
+        let ms_sum = ms_l + ms_r; // sum, not average — per spec
+        momentary_ms.push(ms_sum);
+        momentary.push(ms_to_lufs(ms_sum) as f32);
+        momentary_times.push((pos + block_400ms / 2) as f32 / sample_rate as f32);
+        pos += hop_100ms;
+    }
+
+    // Step 3: Compute short-term loudness (3s blocks, 100ms hop)
+    let block_3s = (sample_rate as f64 * 3.0) as usize;
+    let mut short_term = Vec::new();
+    let mut short_term_times = Vec::new();
+    let mut short_term_ms = Vec::new();
+
+    pos = 0;
+    while pos + block_3s <= filtered_l.len() {
+        let ms_l = mean_square(&filtered_l[pos..pos + block_3s]);
+        let ms_r = mean_square(&filtered_r[pos..pos + block_3s]);
+        let ms_sum = ms_l + ms_r;
+        short_term_ms.push(ms_sum);
+        short_term.push(ms_to_lufs(ms_sum) as f32);
+        short_term_times.push((pos + block_3s / 2) as f32 / sample_rate as f32);
+        pos += hop_100ms;
+    }
+
+    // Step 4: Integrated loudness with EBU R128 gating
+    let integrated = gated_loudness(&momentary_ms);
+
+    // Step 5: Loudness range (LRA) from short-term loudness
+    let loudness_range = compute_lra(&short_term_ms);
+
+    // Step 6: True peak — max of both channels
+    let tp_l = true_peak(left);
+    let tp_r = true_peak(right);
+    let true_peak_dbtp = amplitude_to_db(tp_l.max(tp_r));
+
+    LufsResult {
+        integrated,
+        short_term,
+        momentary,
+        loudness_range,
+        true_peak_dbtp,
+        short_term_times,
+        momentary_times,
+    }
+}
+
 /// EBU R128 gated loudness measurement.
 ///
 /// Two-stage gate:
@@ -790,6 +863,59 @@ mod tests {
             result.integrated > -5.0 && result.integrated < -1.0,
             "44100 Hz: full-scale 1kHz sine should be around -3 LUFS, got {:.1}",
             result.integrated
+        );
+    }
+
+    // ---- Stereo LUFS tests ----
+
+    #[test]
+    fn test_lufs_stereo_identical_channels_3db_louder() {
+        // Identical L/R (dual mono): stereo LUFS should be ~3 dB louder than mono
+        // because ITU-R BS.1770-4 sums channel powers: ms_total = ms_L + ms_R
+        // For identical channels: ms_total = 2 * ms_mono → +3.01 dB
+        let samples = sine_wave_48k(1000.0, 1.0, 5.0);
+        let mono_result = measure_lufs(&samples, 48000);
+        let stereo_result = measure_lufs_stereo(&samples, &samples, 48000);
+
+        let diff = stereo_result.integrated - mono_result.integrated;
+        assert!(
+            (diff - 3.0).abs() < 0.5,
+            "Stereo (dual mono) should be ~3 dB louder than mono, got {:.1} dB difference \
+             (mono={:.1}, stereo={:.1})",
+            diff, mono_result.integrated, stereo_result.integrated
+        );
+    }
+
+    #[test]
+    fn test_lufs_stereo_one_channel_silent() {
+        // Signal in left only, right silent: should equal mono LUFS
+        // (one channel contributes all the power, same as mono)
+        let signal = sine_wave_48k(1000.0, 1.0, 5.0);
+        let silence = vec![0.0_f32; signal.len()];
+        let mono_result = measure_lufs(&signal, 48000);
+        let stereo_result = measure_lufs_stereo(&signal, &silence, 48000);
+
+        let diff = (stereo_result.integrated - mono_result.integrated).abs();
+        assert!(
+            diff < 0.5,
+            "One-channel stereo should match mono LUFS, got {:.1} dB difference \
+             (mono={:.1}, stereo={:.1})",
+            diff, mono_result.integrated, stereo_result.integrated
+        );
+    }
+
+    #[test]
+    fn test_lufs_stereo_true_peak_uses_max_channel() {
+        // Left channel louder than right — true peak should reflect left
+        let loud = sine_wave_48k(1000.0, 1.0, 2.0);
+        let quiet = sine_wave_48k(1000.0, 0.5, 2.0);
+        let result = measure_lufs_stereo(&loud, &quiet, 48000);
+
+        // True peak should be near 0 dBTP (from the loud channel)
+        assert!(
+            result.true_peak_dbtp > -1.0,
+            "True peak should reflect louder channel, got {:.1} dBTP",
+            result.true_peak_dbtp
         );
     }
 }
