@@ -3,12 +3,13 @@
 use std::env;
 use std::time::Instant;
 
-use audio_visualizer_rs::load_audio;
+use audio_visualizer_rs::{load_audio, load_audio_stereo};
 use audio_visualizer_rs::analysis::spectral;
 use audio_visualizer_rs::analysis::harmonic;
 use audio_visualizer_rs::analysis::rhythm;
 use audio_visualizer_rs::analysis::temporal;
 use audio_visualizer_rs::analysis::percussive;
+use audio_visualizer_rs::analysis::stereo;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -273,7 +274,32 @@ fn main() {
 
     println!("  Computed in:     {:.2?}\n", lufs_time);
 
+    // --- Step 9: Stereo analysis ---
+    println!("Computing stereo analysis...");
+    let start = Instant::now();
+
+    let stereo_audio = match load_audio_stereo(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  Stereo load failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let stereo_result = stereo::analyse_stereo(
+        &stereo_audio.left,
+        &stereo_audio.right,
+        stereo_audio.channels,
+        spectrogram.n_fft,
+        spectrogram.hop_length,
+    );
+    let stereo_sum = stereo::stereo_summary(&stereo_result);
+    let stereo_time = start.elapsed();
+
+    print!("{}", stereo::format_stereo_summary(&stereo_sum, stereo_audio.channels));
+    println!("  Computed in:     {:.2?}\n", stereo_time);
+
     // --- Summary ---
-    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time + lufs_time;
+    let total = decode_time + spec_time + features_time + harmonic_time + rhythm_time + perc_time + dr_time + lufs_time + stereo_time;
     println!("=== TOTAL: {:.2?} ===", total);
 }

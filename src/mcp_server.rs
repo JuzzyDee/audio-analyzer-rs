@@ -22,8 +22,8 @@ use rmcp::{
 use serde::Deserialize;
 
 // Import our analysis library
-use audio_visualizer_rs::load_audio;
-use audio_visualizer_rs::analysis::{spectral, harmonic, rhythm, temporal, percussive, downsample};
+use audio_visualizer_rs::{load_audio, load_audio_stereo};
+use audio_visualizer_rs::analysis::{spectral, harmonic, rhythm, temporal, percussive, stereo, downsample};
 
 // ---- Lenient numeric deserialization ----
 // Models sometimes send numbers as strings (e.g. "110" instead of 110).
@@ -208,6 +208,32 @@ fn load_and_analyse(
     Ok(AnalysisInput { audio, spectrogram, time_offset })
 }
 
+/// Load stereo audio with optional time slicing. Returns (left, right, channels, sample_rate).
+fn load_stereo_sliced(
+    path: &str,
+    sample_rate: u32,
+    start_time: Option<f32>,
+    end_time: Option<f32>,
+) -> Result<(Vec<f32>, Vec<f32>, u32), String> {
+    let stereo_audio = load_audio_stereo(path)?;
+    let time_offset = start_time.unwrap_or(0.0).max(0.0);
+    let start_sample = (time_offset * sample_rate as f32) as usize;
+    let end_sample = end_time
+        .map(|t| (t * sample_rate as f32) as usize)
+        .unwrap_or(stereo_audio.left.len())
+        .min(stereo_audio.left.len());
+
+    if start_sample >= end_sample || start_sample >= stereo_audio.left.len() {
+        return Err("Invalid time range for stereo".to_string());
+    }
+
+    Ok((
+        stereo_audio.left[start_sample..end_sample].to_vec(),
+        stereo_audio.right[start_sample..end_sample].to_vec(),
+        stereo_audio.channels,
+    ))
+}
+
 /// Offset timestamps in downsampled f32 series by adding time_offset.
 fn offset_times(series: &mut [(f32, f32)], offset: f32) {
     if offset > 0.0 {
@@ -257,7 +283,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, stereo width, balance, mono compatibility), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
         match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
             Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
@@ -368,6 +394,20 @@ impl AudioAnalyzerServer {
                     format_platform_diff(lufs.integrated, -16.0),
                     format_platform_diff(lufs.integrated, -14.0),
                 );
+
+                // Stereo analysis
+                match load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time) {
+                    Ok((left, right, channels)) => {
+                        let stereo_result = stereo::analyse_stereo(
+                            &left, &right, channels,
+                            spectrogram.n_fft, spectrogram.hop_length,
+                        );
+                        let stereo_sum = stereo::stereo_summary(&stereo_result);
+                        result.push_str("\n── Stereo Field ──\n");
+                        result.push_str(&stereo::format_stereo_summary(&stereo_sum, channels));
+                    }
+                    Err(_) => {} // silently skip if stereo load fails
+                }
 
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
@@ -545,7 +585,7 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
+    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
@@ -746,6 +786,20 @@ impl AudioAnalyzerServer {
                     format_platform_diff(lufs.integrated, -14.0),
                 ));
 
+                // Stereo analysis
+                match load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time) {
+                    Ok((left, right, channels)) => {
+                        let stereo_result = stereo::analyse_stereo(
+                            &left, &right, channels,
+                            spectrogram.n_fft, spectrogram.hop_length,
+                        );
+                        let stereo_sum = stereo::stereo_summary(&stereo_result);
+                        result.push_str("\n── Stereo Field ──\n");
+                        result.push_str(&stereo::format_stereo_summary(&stereo_sum, channels));
+                    }
+                    Err(_) => {} // silently skip if stereo load fails
+                }
+
                 // Append unified time-series table if resolution was requested
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
@@ -856,9 +910,11 @@ impl ServerHandler for AudioAnalyzerServer {
                 "Audio analysis server for examining music files. \
                  Provides tools for spectral features (including frequency \
                  band energy for mix diagnosis, spectral contrast for \
-                 clarity analysis, and dynamic range), harmonic analysis \
-                 (key detection, pitch classes), and rhythm analysis \
-                 (tempo, beats). Pass absolute file paths to the tools. \
+                 clarity analysis, dynamic range, and LUFS loudness), \
+                 stereo field analysis (phase correlation, width, balance, \
+                 mono compatibility), harmonic analysis (key detection, \
+                 pitch classes), and rhythm analysis (tempo, beats). \
+                 Pass absolute file paths to the tools. \
                  This server reads files directly from the local filesystem — \
                  do not ask the user to upload files. Instead, ask them for \
                  the file path on their machine.\n\n\

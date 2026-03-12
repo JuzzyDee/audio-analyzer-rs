@@ -40,6 +40,22 @@ pub struct AudioData {
     pub duration: f64,
 }
 
+#[derive(Debug)]
+pub struct StereoAudioData {
+    /// Left channel samples, normalised to -1.0..1.0
+    pub left: Vec<f32>,
+    /// Right channel samples, normalised to -1.0..1.0
+    pub right: Vec<f32>,
+    /// Mono mixdown (L+R)/2 — same as what load_audio() produces
+    pub mono: Vec<f32>,
+    /// Number of channels in the original file (1 = mono source, 2 = stereo)
+    pub channels: u32,
+    /// Sample rate in Hz
+    pub sample_rate: u32,
+    /// Duration in seconds
+    pub duration: f64,
+}
+
 // `impl` block: attach methods to a struct. Like defining methods inside
 // a class in Python, but the struct definition and its methods are separate.
 impl AudioData {
@@ -205,6 +221,106 @@ pub fn load_audio(path: &str) -> Result<AudioData, String> {
     Ok(AudioData {
         samples: all_samples,
         sample_rate,       // shorthand: field name matches variable name
+        duration,
+    })
+}
+
+/// Load an audio file preserving stereo channels.
+///
+/// Returns left, right, and mono channels. For mono source files,
+/// left and right will be identical copies of the single channel.
+pub fn load_audio_stereo(path: &str) -> Result<StereoAudioData, String> {
+    let file = File::open(path)
+        .map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
+
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = std::path::Path::new(path).extension() {
+        if let Some(ext_str) = ext.to_str() {
+            hint.with_extension(ext_str);
+        }
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| format!("Failed to probe audio format: {}", e))?;
+
+    let mut format = probed.format;
+
+    let track = format
+        .default_track()
+        .ok_or("No audio tracks found in file")?;
+
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or("Unknown sample rate")?;
+
+    let codec_params = track.codec_params.clone();
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&codec_params, &DecoderOptions::default())
+        .map_err(|e| format!("Failed to create decoder: {}", e))?;
+
+    let mut left_samples: Vec<f32> = Vec::new();
+    let mut right_samples: Vec<f32> = Vec::new();
+    let mut file_channels: u32 = 1;
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(_) => break,
+        };
+
+        let decoded = match decoder.decode(&packet) {
+            Ok(decoded) => decoded,
+            Err(_) => continue,
+        };
+
+        let spec = *decoded.spec();
+        let num_channels = spec.channels.count();
+        file_channels = num_channels as u32;
+
+        let mut sample_buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+        sample_buf.copy_interleaved_ref(decoded);
+        let samples = sample_buf.samples();
+
+        if num_channels == 1 {
+            left_samples.extend_from_slice(samples);
+            right_samples.extend_from_slice(samples);
+        } else {
+            // Interleaved: [L, R, L, R, ...] (or more channels — we take first two)
+            for chunk in samples.chunks(num_channels) {
+                left_samples.push(chunk[0]);
+                right_samples.push(if chunk.len() > 1 { chunk[1] } else { chunk[0] });
+            }
+        }
+    }
+
+    if left_samples.is_empty() {
+        return Err("No audio samples decoded".to_string());
+    }
+
+    // Build mono mixdown
+    let mono: Vec<f32> = left_samples.iter()
+        .zip(right_samples.iter())
+        .map(|(l, r)| (l + r) / 2.0)
+        .collect();
+
+    let duration = mono.len() as f64 / sample_rate as f64;
+
+    Ok(StereoAudioData {
+        left: left_samples,
+        right: right_samples,
+        mono,
+        channels: file_channels,
+        sample_rate,
         duration,
     })
 }

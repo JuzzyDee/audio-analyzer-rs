@@ -13,4 +13,5 @@ pub mod harmonic;
 pub mod rhythm;
 pub mod temporal;
 pub mod percussive;
+pub mod stereo;
 pub mod downsample;
