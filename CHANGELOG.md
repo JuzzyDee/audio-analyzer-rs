@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0] - 2026-03-12
+
+### Added
+- Stereo field analysis — phase correlation (mono compatibility), stereo width (mid/side
+  ratio), L/R balance, and mono compatibility score. Per-frame time-series data lets Claude
+  pinpoint exactly where phase issues occur in a mix.
+- Stereo columns in unified time-series table (phase_corr, stereo_w, balance, mono_compat).
+  Table now has 51 columns.
+- `measure_lufs_stereo()` — proper ITU-R BS.1770-4 stereo LUFS measurement that K-weights
+  each channel independently and sums channel powers per block.
+
+### Fixed
+- LUFS loudness was measuring a mono mixdown, underreporting by ~3-4 dB on stereo material.
+  Now matches FabFilter Pro-L 2 exactly (0.0 dB deviation, validated on mastered tracks).
+
 ## [0.4.0] - 2026-03-11
 
 ### Added

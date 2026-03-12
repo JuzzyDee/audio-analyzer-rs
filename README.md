@@ -19,7 +19,8 @@ Full analysis of a 60-second track completes in under 2 seconds (including sourc
 - **Frequency band energy** -- RMS energy across 7 standard producer bands (sub-bass through brilliance) for mix diagnosis
 - **Spectral contrast** -- peak vs valley per band in dB, reveals clarity vs muddiness
 - **Dynamic range** -- crest factor, loudness range (95th-5th percentile), peak dBFS
-- **LUFS loudness** -- EBU R128 integrated loudness, true peak (dBTP), loudness range (LRA), streaming platform targets (Spotify/Apple/YouTube)
+- **LUFS loudness** -- EBU R128 integrated loudness (ITU-R BS.1770-4 stereo channel summing), true peak (dBTP), loudness range (LRA), streaming platform targets. Validated to 0.0 dB of FabFilter Pro-L 2.
+- **Stereo field analysis** -- phase correlation (mono compatibility), stereo width (mid/side ratio), L/R balance, mono compatibility score. Per-frame time-series to pinpoint where phase issues occur.
 - **Temporal features** -- RMS energy (loudness), zero crossing rate (texture)
 - **Timbre** -- 13 MFCCs (Mel-frequency cepstral coefficients)
 - **Harmonic analysis** -- chromagram, key detection (Krumhansl-Schmuckler algorithm), tonnetz
@@ -76,6 +77,8 @@ Restart Claude Desktop. The audio analysis tools will be available in your conve
 
 ## Usage
 
+**Important**: This tool analyses files on your local machine. Give Claude the full file path (e.g., `/Users/you/Music/song.mp3`) -- don't try to upload or attach files to the chat. Claude will read the file directly from disk.
+
 ### CLI (standalone)
 
 ```bash
@@ -89,10 +92,10 @@ Once configured, Claude can call these tools directly:
 | Tool | What it does |
 |------|-------------|
 | `audio_info` | Basic file info: duration, sample rate, sample count |
-| `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs), frequency band energy, spectral contrast, dynamic range, LUFS loudness |
+| `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs), frequency band energy, spectral contrast, dynamic range, LUFS loudness, stereo field |
 | `harmonic_analysis` | Key detection, pitch class distribution, tonnetz |
 | `rhythm_analysis` | Tempo (BPM), beat positions, tempo stability |
-| `full_analysis` | Everything above in one call, plus percussive character (HPSS) |
+| `full_analysis` | Everything above in one call, plus percussive character (HPSS) and stereo field |
 
 ### Example: full_analysis output
 
@@ -158,14 +161,18 @@ Crest factor:    16.2 dB — very dynamic
 Loudness range:  76.4 dB — very dynamic
 Quiet sections:  -87.5 dBFS | Loud sections: -11.1 dBFS
 
-── LUFS Loudness (EBU R128) ──
-Integrated:      -18.3 LUFS
-True peak:       -0.4 dBTP
-Loudness range:  8.2 LU
-Platform targets:
-  Spotify        -14 LUFS → turned UP 4.3 dB (will sound quieter)
-  Apple Music    -16 LUFS → turned UP 2.3 dB (will sound quieter)
-  YouTube        -14 LUFS → turned UP 4.3 dB (will sound quieter)
+── Loudness (EBU R128) ──
+Integrated:      -12.1 LUFS
+True peak:       0.0 dBTP
+Loudness range:  3.7 LU
+Spotify (-14):   turned DOWN 1.9 dB | Apple (-16): turned DOWN 3.9 dB | YouTube (-14): turned DOWN 1.9 dB
+
+── Stereo Field ──
+Phase correlation:   0.257 avg, -0.822 min — some phase issues
+Phase warnings:      20.6% of frames have negative correlation
+Stereo width:        0.812 avg, 2.747 max — wide
+Balance:             -0.095 — slightly left
+Mono compatibility:  0.620 avg, 0.117 min — significant mono loss
 ```
 
 When you add `resolution: "medium"`, the output also includes a time-series table showing how every feature changes over the track's duration -- letting Claude see the intro build, the dynamic solo section, and the quiet outro.
@@ -191,20 +198,24 @@ The presets are calibrated for token efficiency. A 3-minute track at `"medium"` 
 ```
 audio file
     |
-    v
-load_audio()          -- Symphonia decodes to mono f32 samples
+    +---> load_audio()          -- Symphonia decodes to mono f32 samples
+    |         |
+    |         v
+    |     compute_spectrogram() -- STFT via rustfft, time-frequency matrix
+    |         |
+    |         +---> spectral.rs    -- centroid, bandwidth, rolloff, flatness, MFCCs, band energy, contrast
+    |         +---> temporal.rs    -- RMS energy, zero crossing rate, dynamic range
+    |         +---> harmonic.rs    -- chromagram, key detection, tonnetz
+    |         +---> rhythm.rs      -- onset detection, tempo, beat tracking
+    |         +---> percussive.rs  -- HPSS (source separation), attack sharpness, onset density
+    |
+    +---> load_audio_stereo()   -- preserves L/R channels
+              |
+              +---> stereo.rs      -- phase correlation, width, balance, mono compatibility
+              +---> temporal.rs    -- LUFS loudness (ITU-R BS.1770-4 stereo channel summing)
     |
     v
-compute_spectrogram() -- STFT via rustfft, produces time-frequency matrix
-    |
-    +---> spectral.rs    -- centroid, bandwidth, rolloff, flatness, MFCCs, band energy, contrast
-    +---> temporal.rs    -- RMS energy, zero crossing rate, dynamic range, LUFS loudness
-    +---> harmonic.rs    -- chromagram, key detection, tonnetz
-    +---> rhythm.rs      -- onset detection, tempo, beat tracking
-    +---> percussive.rs  -- HPSS (source separation), attack sharpness, onset density
-    |
-    v
-downsample.rs           -- bin-average to target resolution, format as TSV
+downsample.rs                   -- bin-average to target resolution, format as TSV
 ```
 
 Two binaries share the same analysis library:
