@@ -786,18 +786,20 @@ impl AudioAnalyzerServer {
                     format_platform_diff(lufs.integrated, -14.0),
                 ));
 
-                // Stereo analysis
-                match load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time) {
-                    Ok((left, right, channels)) => {
-                        let stereo_result = stereo::analyse_stereo(
+                // Stereo analysis — keep the per-frame result for time-series
+                let stereo_data = load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time)
+                    .ok()
+                    .map(|(left, right, channels)| {
+                        stereo::analyse_stereo(
                             &left, &right, channels,
                             spectrogram.n_fft, spectrogram.hop_length,
-                        );
-                        let stereo_sum = stereo::stereo_summary(&stereo_result);
-                        result.push_str("\n── Stereo Field ──\n");
-                        result.push_str(&stereo::format_stereo_summary(&stereo_sum, channels));
-                    }
-                    Err(_) => {} // silently skip if stereo load fails
+                        )
+                    });
+
+                if let Some(ref stereo_result) = stereo_data {
+                    let stereo_sum = stereo::stereo_summary(stereo_result);
+                    result.push_str("\n── Stereo Field ──\n");
+                    result.push_str(&stereo::format_stereo_summary(&stereo_sum, stereo_result.source_channels));
                 }
 
                 // Append unified time-series table if resolution was requested
@@ -817,6 +819,29 @@ impl AudioAnalyzerServer {
                             let mut ds_attack = downsample::downsample_f32(&perc_feats.attack_sharpness, fps, target_fps);
                             let mut ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
                             let mut ds_crest = downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
+
+                            // Stereo time-series (if available)
+                            let ds_phase_corr = stereo_data.as_ref().map(|s| {
+                                let mut ds = downsample::downsample_f32(&s.phase_correlation, fps, target_fps);
+                                offset_times(&mut ds, time_offset);
+                                ds
+                            });
+                            let ds_stereo_width = stereo_data.as_ref().map(|s| {
+                                let mut ds = downsample::downsample_f32(&s.stereo_width, fps, target_fps);
+                                offset_times(&mut ds, time_offset);
+                                ds
+                            });
+                            let ds_balance = stereo_data.as_ref().map(|s| {
+                                let mut ds = downsample::downsample_f32(&s.balance, fps, target_fps);
+                                offset_times(&mut ds, time_offset);
+                                ds
+                            });
+                            let ds_mono_compat = stereo_data.as_ref().map(|s| {
+                                let mut ds = downsample::downsample_f32(&s.mono_compatibility, fps, target_fps);
+                                offset_times(&mut ds, time_offset);
+                                ds
+                            });
+
                             let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
                             let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
                             let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
@@ -866,21 +891,43 @@ impl AudioAnalyzerServer {
                                 .min(ds_tonnetz.len())
                                 .min(ds_bands.len());
 
+                            // Build f32 series list — stereo columns are optional
+                            let mut f32_entries: Vec<(&[&str], &[(f32, f32)])> = vec![
+                                (&["centroid_hz"], &ds_centroid[..]),
+                                (&["bandwidth_hz"], &ds_bandwidth[..]),
+                                (&["rolloff_hz"], &ds_rolloff[..]),
+                                (&["flatness"], &ds_flatness[..]),
+                                (&["rms"], &ds_rms[..]),
+                                (&["zcr"], &ds_zcr[..]),
+                                (&["onset"], &ds_onset[..]),
+                                (&["perc_ratio"], &ds_perc_ratio[..]),
+                                (&["attack"], &ds_attack[..]),
+                                (&["density"], &ds_density[..]),
+                                (&["crest_db"], &ds_crest[..]),
+                            ];
+
+                            // Stereo column name slices (need stable references)
+                            let pc_cols: &[&str] = &["phase_corr"];
+                            let sw_cols: &[&str] = &["stereo_w"];
+                            let bal_cols: &[&str] = &["balance"];
+                            let mc_cols: &[&str] = &["mono_compat"];
+
+                            if let Some(ref ds) = ds_phase_corr {
+                                f32_entries.push((pc_cols, &ds[..]));
+                            }
+                            if let Some(ref ds) = ds_stereo_width {
+                                f32_entries.push((sw_cols, &ds[..]));
+                            }
+                            if let Some(ref ds) = ds_balance {
+                                f32_entries.push((bal_cols, &ds[..]));
+                            }
+                            if let Some(ref ds) = ds_mono_compat {
+                                f32_entries.push((mc_cols, &ds[..]));
+                            }
+
                             result.push_str(&downsample::format_unified_timeseries(
                                 n_points,
-                                &[
-                                    (&["centroid_hz"], &ds_centroid[..]),
-                                    (&["bandwidth_hz"], &ds_bandwidth[..]),
-                                    (&["rolloff_hz"], &ds_rolloff[..]),
-                                    (&["flatness"], &ds_flatness[..]),
-                                    (&["rms"], &ds_rms[..]),
-                                    (&["zcr"], &ds_zcr[..]),
-                                    (&["onset"], &ds_onset[..]),
-                                    (&["perc_ratio"], &ds_perc_ratio[..]),
-                                    (&["attack"], &ds_attack[..]),
-                                    (&["density"], &ds_density[..]),
-                                    (&["crest_db"], &ds_crest[..]),
-                                ],
+                                &f32_entries,
                                 Some((&ds_chroma, chroma_cols)),
                                 Some((&ds_tonnetz, tonnetz_cols)),
                                 Some((&ds_bands, &band_cols)),
