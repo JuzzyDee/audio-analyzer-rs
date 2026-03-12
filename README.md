@@ -2,7 +2,9 @@
 
 **An MCP server that gives Claude the ability to hear music.**
 
-Point Claude at any audio file and it can tell you the key, tempo, dynamics, timbre, percussive character, and how the music evolves over time -- all from raw audio analysis, no images, no guessing, under 1% context window usage.
+Point Claude at any audio file and it can tell you the key, tempo, dynamics, timbre, percussive character, stereo field, structural sections, and how the music evolves over time -- all from raw audio analysis, no images, no guessing, under 1% context window usage.
+
+Compare two tracks side-by-side. Detect where the music changes structurally — intro, verse, chorus, bridge — and zoom into the moments that matter.
 
 ## What is this?
 
@@ -26,6 +28,8 @@ Full analysis of a 60-second track completes in under 2 seconds (including sourc
 - **Harmonic analysis** -- chromagram, key detection (Krumhansl-Schmuckler algorithm), tonnetz
 - **Rhythm analysis** -- tempo estimation, beat tracking, onset detection, tempo stability
 - **Percussive character** -- harmonic/percussive source separation (HPSS), attack sharpness, onset density
+- **Section boundary detection** -- multi-feature novelty analysis detects structural changes (energy, spectral, harmonic, texture). Enables a summary→zoom workflow: get the map, then dive into interesting moments
+- **A/B comparison** -- analyse two tracks side-by-side, get a compact diff table highlighting differences in loudness, dynamics, spectral balance, stereo field, key, and tempo
 - **Time-series data** -- track how every feature evolves over time at selectable resolution
 - **Token-efficient** -- downsampled output calibrated to fit comfortably in the context window
 
@@ -83,6 +87,7 @@ Restart Claude Desktop. The audio analysis tools will be available in your conve
 
 ```bash
 cargo run --bin cli -- /path/to/song.mp3
+cargo run --bin cli -- compare /path/to/mix_v1.mp3 /path/to/mix_v2.mp3
 ```
 
 ### MCP tools
@@ -95,7 +100,8 @@ Once configured, Claude can call these tools directly:
 | `spectral_features` | Brightness, richness, loudness, texture, timbre (MFCCs), frequency band energy, spectral contrast, dynamic range, LUFS loudness, stereo field |
 | `harmonic_analysis` | Key detection, pitch class distribution, tonnetz |
 | `rhythm_analysis` | Tempo (BPM), beat positions, tempo stability |
-| `full_analysis` | Everything above in one call, plus percussive character (HPSS) and stereo field |
+| `full_analysis` | Everything above in one call, plus percussive character (HPSS), stereo field, and section boundaries. Recommended workflow: call without resolution first to get summary + section map, then zoom into interesting sections with `start_time`/`end_time` at high resolution |
+| `compare` | A/B two tracks -- analyses both and returns a compact diff table |
 
 ### Example: full_analysis output
 
@@ -173,6 +179,12 @@ Phase warnings:      20.6% of frames have negative correlation
 Stereo width:        0.812 avg, 2.747 max — wide
 Balance:             -0.095 — slightly left
 Mono compatibility:  0.620 avg, 0.117 min — significant mono loss
+
+── Section Boundaries ──
+  Working BPM:     84 (confidence: 0.32)
+  Boundaries:      2
+     0:18.3s  energy+spectral+texture (confidence: 0.85)
+     0:42.1s  energy+harmonic (confidence: 0.67)
 ```
 
 When you add `resolution: "medium"`, the output also includes a time-series table showing how every feature changes over the track's duration -- letting Claude see the intro build, the dynamic solo section, and the quiet outro.
@@ -208,6 +220,7 @@ audio file
     |         +---> harmonic.rs    -- chromagram, key detection, tonnetz
     |         +---> rhythm.rs      -- onset detection, tempo, beat tracking
     |         +---> percussive.rs  -- HPSS (source separation), attack sharpness, onset density
+    |         +---> sections.rs    -- section boundary detection (multi-feature novelty)
     |
     +---> load_audio_stereo()   -- preserves L/R channels
               |

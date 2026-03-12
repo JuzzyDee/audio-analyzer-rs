@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-rc1] - 2026-03-13
+
+### Added
+- **Section boundary detection** — multi-feature novelty analysis (energy, spectral, harmonic,
+  texture) with tempo-adaptive checkerboard kernels, median+MAD thresholds, and stronger-peak-wins
+  peak picking. Automatically included in `full_analysis` for full-track calls. Section boundaries
+  enable a summary→zoom workflow: get the structural map first, then dive into interesting moments
+  at high resolution. ~28ms for a 107-second track.
+- **A/B comparison tool** — dedicated `compare` MCP tool that analyses two tracks side-by-side
+  and returns a compact diff table highlighting differences in loudness, dynamics, spectral balance,
+  stereo field, key, and tempo.
+- GitHub Actions CI pipeline — `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`
+  on every push and pull request.
+
 ## [0.5.0] - 2026-03-12
 
 ### Added
