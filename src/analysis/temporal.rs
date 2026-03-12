@@ -26,10 +26,7 @@ pub fn rms_energy(samples: &[f32], frame_size: usize, hop_length: usize) -> Vec<
         let start = frame * hop_length;
         let end = start + frame_size;
 
-        let sum_sq: f32 = samples[start..end]
-            .iter()
-            .map(|&s| s * s)
-            .sum();
+        let sum_sq: f32 = samples[start..end].iter().map(|&s| s * s).sum();
 
         result.push((sum_sq / frame_size as f32).sqrt());
     }
@@ -147,7 +144,8 @@ pub fn dynamic_range(samples: &[f32], frame_size: usize, hop_length: usize) -> D
 
     // Loudness range: 95th - 5th percentile of RMS in dB
     // Filter out silence (< -60 dB) to avoid skewing the range
-    let mut rms_db: Vec<f32> = rms.iter()
+    let mut rms_db: Vec<f32> = rms
+        .iter()
         .filter(|&&r| r > 1e-10)
         .map(|&r| amplitude_to_db(r))
         .collect();
@@ -156,7 +154,11 @@ pub fn dynamic_range(samples: &[f32], frame_size: usize, hop_length: usize) -> D
     let (rms_5th_db, rms_95th_db, loudness_range_db) = if rms_db.len() >= 2 {
         let idx_5 = (rms_db.len() as f32 * 0.05) as usize;
         let idx_95 = ((rms_db.len() as f32 * 0.95) as usize).min(rms_db.len() - 1);
-        (rms_db[idx_5], rms_db[idx_95], rms_db[idx_95] - rms_db[idx_5])
+        (
+            rms_db[idx_5],
+            rms_db[idx_95],
+            rms_db[idx_95] - rms_db[idx_5],
+        )
     } else {
         (0.0, 0.0, 0.0)
     };
@@ -176,8 +178,11 @@ pub fn dynamic_range(samples: &[f32], frame_size: usize, hop_length: usize) -> D
 
 /// Biquad filter coefficients (second-order IIR).
 struct Biquad {
-    b0: f64, b1: f64, b2: f64,
-    a1: f64, a2: f64,
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
 }
 
 impl Biquad {
@@ -190,8 +195,7 @@ impl Biquad {
 
         for s in samples.iter_mut() {
             let x0 = *s as f64;
-            let y0 = self.b0 * x0 + self.b1 * x1 + self.b2 * x2
-                   - self.a1 * y1 - self.a2 * y2;
+            let y0 = self.b0 * x0 + self.b1 * x1 + self.b2 * x2 - self.a1 * y1 - self.a2 * y2;
             x2 = x1;
             x1 = x0;
             y2 = y1;
@@ -508,7 +512,8 @@ fn gated_loudness(block_ms: &[f64]) -> f32 {
 
     // Stage 1: Absolute gate at -70 LUFS
     let abs_threshold_ms = 10.0_f64.powf((-70.0 + 0.691) / 10.0);
-    let above_abs: Vec<f64> = block_ms.iter()
+    let above_abs: Vec<f64> = block_ms
+        .iter()
         .copied()
         .filter(|&ms| ms > abs_threshold_ms)
         .collect();
@@ -523,7 +528,8 @@ fn gated_loudness(block_ms: &[f64]) -> f32 {
 
     // Stage 2: Relative gate at ungated_mean - 10 LU
     let rel_threshold_ms = 10.0_f64.powf((ungated_lufs - 10.0 + 0.691) / 10.0);
-    let above_rel: Vec<f64> = block_ms.iter()
+    let above_rel: Vec<f64> = block_ms
+        .iter()
         .copied()
         .filter(|&ms| ms > rel_threshold_ms)
         .collect();
@@ -547,7 +553,8 @@ fn compute_lra(short_term_ms: &[f64]) -> f32 {
 
     // Stage 1: Absolute gate at -70 LUFS
     let abs_threshold_ms = 10.0_f64.powf((-70.0 + 0.691) / 10.0);
-    let above_abs: Vec<f64> = short_term_ms.iter()
+    let above_abs: Vec<f64> = short_term_ms
+        .iter()
         .copied()
         .filter(|&ms| ms > abs_threshold_ms)
         .collect();
@@ -561,10 +568,11 @@ fn compute_lra(short_term_ms: &[f64]) -> f32 {
     let ungated_lufs = ms_to_lufs(ungated_mean);
     let rel_threshold_ms = 10.0_f64.powf((ungated_lufs - 20.0 + 0.691) / 10.0);
 
-    let mut gated_lufs: Vec<f64> = short_term_ms.iter()
+    let mut gated_lufs: Vec<f64> = short_term_ms
+        .iter()
         .copied()
         .filter(|&ms| ms > rel_threshold_ms)
-        .map(|ms| ms_to_lufs(ms))
+        .map(ms_to_lufs)
         .collect();
 
     if gated_lufs.len() < 2 {
@@ -656,7 +664,8 @@ mod tests {
         assert!(
             avg_high > avg_low * 5.0,
             "4000 Hz ZCR ({:.4}) should be much higher than 100 Hz ({:.4})",
-            avg_high, avg_low
+            avg_high,
+            avg_low
         );
     }
 
@@ -683,7 +692,8 @@ mod tests {
         let dr = dynamic_range(&samples, 2048, 512);
 
         assert!(!dr.crest_factor_db.is_empty());
-        let avg_crest: f32 = dr.crest_factor_db.iter().sum::<f32>() / dr.crest_factor_db.len() as f32;
+        let avg_crest: f32 =
+            dr.crest_factor_db.iter().sum::<f32>() / dr.crest_factor_db.len() as f32;
         assert!(
             (avg_crest - 3.01).abs() < 0.5,
             "Sine crest factor should be ~3.01 dB, got {:.2} dB",
@@ -810,7 +820,8 @@ mod tests {
         assert!(
             lufs_high.integrated > lufs_low.integrated,
             "4kHz ({:.1} LUFS) should measure louder than 100Hz ({:.1} LUFS) with K-weighting",
-            lufs_high.integrated, lufs_low.integrated
+            lufs_high.integrated,
+            lufs_low.integrated
         );
     }
 
@@ -882,7 +893,9 @@ mod tests {
             (diff - 3.0).abs() < 0.5,
             "Stereo (dual mono) should be ~3 dB louder than mono, got {:.1} dB difference \
              (mono={:.1}, stereo={:.1})",
-            diff, mono_result.integrated, stereo_result.integrated
+            diff,
+            mono_result.integrated,
+            stereo_result.integrated
         );
     }
 
@@ -900,7 +913,9 @@ mod tests {
             diff < 0.5,
             "One-channel stereo should match mono LUFS, got {:.1} dB difference \
              (mono={:.1}, stereo={:.1})",
-            diff, mono_result.integrated, stereo_result.integrated
+            diff,
+            mono_result.integrated,
+            stereo_result.integrated
         );
     }
 

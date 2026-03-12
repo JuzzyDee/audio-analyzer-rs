@@ -4,6 +4,12 @@
 // We declare submodules here and re-export their public items.
 // For now everything lives in this file; we'll split it up as it grows.
 
+// DSP code often indexes into multiple parallel arrays at the same position.
+// Iterator-based alternatives obscure the intent. Allow indexed loops crate-wide.
+#![allow(clippy::needless_range_loop)]
+// Generic type signatures for downsampled time-series are inherently nested.
+#![allow(clippy::type_complexity)]
+
 // ---- Modules ----
 // `pub mod` declares a public submodule. Rust looks for either:
 //   - src/analysis.rs (single file module), or
@@ -15,13 +21,13 @@ pub mod analysis;
 // `use` brings items into scope. The `::` is Rust's path separator (like `.` in Python).
 // Symphonia is organised into sub-crates (core, default).
 
-use std::fs::File;                          // File I/O from the standard library
-use symphonia::core::audio::SampleBuffer;   // Buffer to hold decoded audio samples
+use std::fs::File; // File I/O from the standard library
+use symphonia::core::audio::SampleBuffer; // Buffer to hold decoded audio samples
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream; // Wraps a file for streaming reads
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;           // Tells Symphonia what format to expect
+use symphonia::core::probe::Hint; // Tells Symphonia what format to expect
 
 // `pub struct` defines a public data structure — like a Python dataclass.
 // In Rust, data and behaviour are separate: you define the struct, then
@@ -103,8 +109,7 @@ pub fn load_audio(path: &str) -> Result<AudioData, String> {
     // Open the file. `map_err` converts the IO error into our String error type.
     // This pattern — calling a function that returns Result, then transforming
     // the error — is extremely common in Rust.
-    let file = File::open(path)
-        .map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
+    let file = File::open(path).map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
     //                                                                 ^
     // The `?` operator: Rust's equivalent of "if this failed, return the error
     // immediately." It's syntactic sugar for a match statement that either
@@ -119,12 +124,10 @@ pub fn load_audio(path: &str) -> Result<AudioData, String> {
 
     // Give Symphonia a hint about the file format based on extension.
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension() {
-        // `if let` is pattern matching for a single case — like checking
-        // `if x is not None` in Python but more powerful.
-        if let Some(ext_str) = ext.to_str() {
-            hint.with_extension(ext_str);
-        }
+    if let Some(ext) = std::path::Path::new(path).extension()
+        && let Some(ext_str) = ext.to_str()
+    {
+        hint.with_extension(ext_str);
     }
 
     // Probe the file to detect the format and find audio tracks.
@@ -163,15 +166,8 @@ pub fn load_audio(path: &str) -> Result<AudioData, String> {
     // `Vec::new()` creates an empty growable array (like Python's []).
     let mut all_samples: Vec<f32> = Vec::new();
 
-    // `loop` is an infinite loop. We break out when we hit end-of-stream.
-    // Rust has no while(true) — `loop` is the idiomatic way.
-    loop {
-        // Read the next packet from the container.
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(_) => break, // End of stream or error — we're done
-        };
-
+    // Decode packets until end-of-stream.
+    while let Ok(packet) = format.next_packet() {
         // Decode the packet into audio samples.
         let decoded = match decoder.decode(&packet) {
             Ok(decoded) => decoded,
@@ -220,7 +216,7 @@ pub fn load_audio(path: &str) -> Result<AudioData, String> {
     // implicitly returned (no semicolon!). This is like Ruby/Kotlin.
     Ok(AudioData {
         samples: all_samples,
-        sample_rate,       // shorthand: field name matches variable name
+        sample_rate, // shorthand: field name matches variable name
         duration,
     })
 }
@@ -230,16 +226,15 @@ pub fn load_audio(path: &str) -> Result<AudioData, String> {
 /// Returns left, right, and mono channels. For mono source files,
 /// left and right will be identical copies of the single channel.
 pub fn load_audio_stereo(path: &str) -> Result<StereoAudioData, String> {
-    let file = File::open(path)
-        .map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
+    let file = File::open(path).map_err(|e| format!("Cannot open file '{}': {}", path, e))?;
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension() {
-        if let Some(ext_str) = ext.to_str() {
-            hint.with_extension(ext_str);
-        }
+    if let Some(ext) = std::path::Path::new(path).extension()
+        && let Some(ext_str) = ext.to_str()
+    {
+        hint.with_extension(ext_str);
     }
 
     let probed = symphonia::default::get_probe()
@@ -272,12 +267,7 @@ pub fn load_audio_stereo(path: &str) -> Result<StereoAudioData, String> {
     let mut right_samples: Vec<f32> = Vec::new();
     let mut file_channels: u32 = 1;
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(_) => break,
-        };
-
+    while let Ok(packet) = format.next_packet() {
         let decoded = match decoder.decode(&packet) {
             Ok(decoded) => decoded,
             Err(_) => continue,
@@ -308,7 +298,8 @@ pub fn load_audio_stereo(path: &str) -> Result<StereoAudioData, String> {
     }
 
     // Build mono mixdown
-    let mono: Vec<f32> = left_samples.iter()
+    let mono: Vec<f32> = left_samples
+        .iter()
         .zip(right_samples.iter())
         .map(|(l, r)| (l + r) / 2.0)
         .collect();

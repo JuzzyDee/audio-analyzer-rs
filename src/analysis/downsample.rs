@@ -26,7 +26,12 @@ pub fn resolution_to_fps(resolution: &str) -> Result<f32, String> {
         "high" => Ok(4.0),
         other => other
             .parse::<f32>()
-            .map_err(|_| format!("Invalid resolution '{}'. Use low, medium, high, or a number.", other))
+            .map_err(|_| {
+                format!(
+                    "Invalid resolution '{}'. Use low, medium, high, or a number.",
+                    other
+                )
+            })
             .and_then(|v| {
                 if v > 0.0 {
                     Ok(v)
@@ -46,11 +51,7 @@ pub fn native_fps(sample_rate: u32, hop_length: usize) -> f32 {
 ///
 /// Returns (time_seconds, averaged_value) pairs.
 /// Time is the midpoint of each bin.
-pub fn downsample_f32(
-    data: &[f32],
-    native_fps: f32,
-    target_fps: f32,
-) -> Vec<(f32, f32)> {
+pub fn downsample_f32(data: &[f32], native_fps: f32, target_fps: f32) -> Vec<(f32, f32)> {
     if data.is_empty() {
         return Vec::new();
     }
@@ -148,11 +149,7 @@ pub fn downsample_array<const N: usize>(
 ///
 /// `columns` names each series. `series` holds the downsampled data for each.
 /// All series must share the same time axis (same length, same timestamps).
-pub fn format_f32_series(
-    section_name: &str,
-    columns: &[&str],
-    series: &[&[(f32, f32)]],
-) -> String {
+pub fn format_f32_series(section_name: &str, columns: &[&str], series: &[&[(f32, f32)]]) -> String {
     if series.is_empty() || series[0].is_empty() {
         return String::new();
     }
@@ -410,9 +407,7 @@ mod tests {
     #[test]
     fn test_downsample_array() {
         // 10 frames of [f32; 2], downsample 10fps -> 1fps
-        let data: Vec<[f32; 2]> = (0..10)
-            .map(|i| [i as f32, (i * 2) as f32])
-            .collect();
+        let data: Vec<[f32; 2]> = (0..10).map(|i| [i as f32, (i * 2) as f32]).collect();
         let result = downsample_array(&data, 10.0, 1.0);
         assert_eq!(result.len(), 1);
         assert!((result[0].1[0] - 4.5).abs() < 0.01);
@@ -442,10 +437,18 @@ mod tests {
         let centroid = vec![(0.5, 100.0), (1.5, 200.0)];
         let flatness = vec![(0.5, 0.05), (1.5, 0.08)];
         let chroma: Vec<(f32, [f32; 12])> = vec![
-            (0.5, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            (1.5, [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            (
+                0.5,
+                [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ),
+            (
+                1.5,
+                [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ),
         ];
-        let chroma_cols = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+        let chroma_cols = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
         let chroma_col_refs: Vec<&str> = chroma_cols.iter().copied().collect();
 
         let output = format_unified_timeseries(
@@ -462,7 +465,10 @@ mod tests {
         // Time appears only once per row
         assert!(output.contains("0.50\t100.000\t0.050\t1.000"));
         // Only 2 data lines
-        let data_lines: Vec<&str> = output.lines().filter(|l| !l.starts_with('#') && !l.starts_with('─') && !l.is_empty()).collect();
+        let data_lines: Vec<&str> = output
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.starts_with('─') && !l.is_empty())
+            .collect();
         assert_eq!(data_lines.len(), 2);
     }
 }

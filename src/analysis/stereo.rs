@@ -168,7 +168,7 @@ pub fn analyse_stereo(
 }
 
 /// Summary statistics for stereo analysis.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StereoSummary {
     pub avg_phase_correlation: f32,
     pub min_phase_correlation: f32,
@@ -201,7 +201,9 @@ pub fn stereo_summary(analysis: &StereoAnalysis) -> StereoSummary {
     let min = |v: &[f32]| v.iter().cloned().fold(f32::INFINITY, f32::min);
     let max = |v: &[f32]| v.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
 
-    let phase_warnings = analysis.phase_correlation.iter()
+    let phase_warnings = analysis
+        .phase_correlation
+        .iter()
         .filter(|&&c| c < 0.0)
         .count();
 
@@ -269,9 +271,17 @@ pub fn format_stereo_summary(summary: &StereoSummary, source_channels: u32) -> S
     let bal_desc = if summary.avg_balance.abs() < 0.02 {
         "centred"
     } else if summary.avg_balance.abs() < 0.1 {
-        if summary.avg_balance > 0.0 { "slightly right" } else { "slightly left" }
+        if summary.avg_balance > 0.0 {
+            "slightly right"
+        } else {
+            "slightly left"
+        }
     } else {
-        if summary.avg_balance > 0.0 { "right-heavy" } else { "left-heavy" }
+        if summary.avg_balance > 0.0 {
+            "right-heavy"
+        } else {
+            "left-heavy"
+        }
     };
     out.push_str(&format!(
         "Balance:             {:.3} — {}\n",
@@ -296,7 +306,6 @@ pub fn format_stereo_summary(summary: &StereoSummary, source_channels: u32) -> S
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,40 +313,58 @@ mod tests {
     #[test]
     fn test_identical_channels_perfect_mono() {
         // Identical L/R should give correlation=1, width=0, compat=1
-        let samples: Vec<f32> = (0..4096)
-            .map(|i| (i as f32 * 0.1).sin())
-            .collect();
+        let samples: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
 
         let result = analyse_stereo(&samples, &samples, 2, 2048, 512);
         let summary = stereo_summary(&result);
 
-        assert!(summary.avg_phase_correlation > 0.99, "correlation should be ~1.0, got {}", summary.avg_phase_correlation);
-        assert!(summary.avg_stereo_width < 0.01, "width should be ~0, got {}", summary.avg_stereo_width);
-        assert!(summary.avg_mono_compatibility > 0.99, "mono compat should be ~1.0, got {}", summary.avg_mono_compatibility);
-        assert!((summary.avg_balance).abs() < 0.01, "balance should be ~0, got {}", summary.avg_balance);
+        assert!(
+            summary.avg_phase_correlation > 0.99,
+            "correlation should be ~1.0, got {}",
+            summary.avg_phase_correlation
+        );
+        assert!(
+            summary.avg_stereo_width < 0.01,
+            "width should be ~0, got {}",
+            summary.avg_stereo_width
+        );
+        assert!(
+            summary.avg_mono_compatibility > 0.99,
+            "mono compat should be ~1.0, got {}",
+            summary.avg_mono_compatibility
+        );
+        assert!(
+            (summary.avg_balance).abs() < 0.01,
+            "balance should be ~0, got {}",
+            summary.avg_balance
+        );
     }
 
     #[test]
     fn test_inverted_channels_cancel() {
         // L = -R should give correlation=-1, compat=0
-        let left: Vec<f32> = (0..4096)
-            .map(|i| (i as f32 * 0.1).sin())
-            .collect();
+        let left: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
         let right: Vec<f32> = left.iter().map(|s| -s).collect();
 
         let result = analyse_stereo(&left, &right, 2, 2048, 512);
         let summary = stereo_summary(&result);
 
-        assert!(summary.avg_phase_correlation < -0.99, "correlation should be ~-1, got {}", summary.avg_phase_correlation);
-        assert!(summary.avg_mono_compatibility < 0.01, "mono compat should be ~0, got {}", summary.avg_mono_compatibility);
+        assert!(
+            summary.avg_phase_correlation < -0.99,
+            "correlation should be ~-1, got {}",
+            summary.avg_phase_correlation
+        );
+        assert!(
+            summary.avg_mono_compatibility < 0.01,
+            "mono compat should be ~0, got {}",
+            summary.avg_mono_compatibility
+        );
     }
 
     #[test]
     fn test_uncorrelated_channels() {
         // Different frequencies should give low correlation
-        let left: Vec<f32> = (0..4096)
-            .map(|i| (i as f32 * 0.1).sin())
-            .collect();
+        let left: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
         let right: Vec<f32> = (0..4096)
             .map(|i| (i as f32 * 0.1537).sin()) // different frequency
             .collect();
@@ -346,46 +373,54 @@ mod tests {
         let summary = stereo_summary(&result);
 
         // Should be somewhere between -1 and 1, but not near the extremes
-        assert!(summary.avg_phase_correlation.abs() < 0.5,
-            "correlation should be low for uncorrelated signals, got {}", summary.avg_phase_correlation);
-        assert!(summary.avg_stereo_width > 0.3,
-            "width should be moderate+ for uncorrelated signals, got {}", summary.avg_stereo_width);
+        assert!(
+            summary.avg_phase_correlation.abs() < 0.5,
+            "correlation should be low for uncorrelated signals, got {}",
+            summary.avg_phase_correlation
+        );
+        assert!(
+            summary.avg_stereo_width > 0.3,
+            "width should be moderate+ for uncorrelated signals, got {}",
+            summary.avg_stereo_width
+        );
     }
 
     #[test]
     fn test_left_only() {
         // Signal only in left channel — balance should be negative (left-heavy)
-        let left: Vec<f32> = (0..4096)
-            .map(|i| (i as f32 * 0.1).sin())
-            .collect();
+        let left: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
         let right = vec![0.0_f32; 4096];
 
         let result = analyse_stereo(&left, &right, 2, 2048, 512);
         let summary = stereo_summary(&result);
 
-        assert!(summary.avg_balance < -0.8, "should be left-heavy, got {}", summary.avg_balance);
+        assert!(
+            summary.avg_balance < -0.8,
+            "should be left-heavy, got {}",
+            summary.avg_balance
+        );
     }
 
     #[test]
     fn test_right_only() {
         // Signal only in right channel — balance should be positive (right-heavy)
         let left = vec![0.0_f32; 4096];
-        let right: Vec<f32> = (0..4096)
-            .map(|i| (i as f32 * 0.1).sin())
-            .collect();
+        let right: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
 
         let result = analyse_stereo(&left, &right, 2, 2048, 512);
         let summary = stereo_summary(&result);
 
-        assert!(summary.avg_balance > 0.8, "should be right-heavy, got {}", summary.avg_balance);
+        assert!(
+            summary.avg_balance > 0.8,
+            "should be right-heavy, got {}",
+            summary.avg_balance
+        );
     }
 
     #[test]
     fn test_mono_source_trivial() {
         // Mono source file — identical channels, should be trivially perfect
-        let samples: Vec<f32> = (0..4096)
-            .map(|i| (i as f32 * 0.1).sin())
-            .collect();
+        let samples: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.1).sin()).collect();
 
         let result = analyse_stereo(&samples, &samples, 1, 2048, 512);
         assert_eq!(result.source_channels, 1);

@@ -201,9 +201,9 @@ pub fn to_db(magnitudes: &[Vec<f32>]) -> Vec<Vec<f32>> {
     // Find the global maximum for reference
     let max_val = magnitudes
         .iter()
-        .flat_map(|frame| frame.iter())  // flatten 2D → 1D iterator
-        .cloned()                         // convert &f32 → f32
-        .fold(f32::MIN, f32::max);        // find maximum
+        .flat_map(|frame| frame.iter()) // flatten 2D → 1D iterator
+        .cloned() // convert &f32 → f32
+        .fold(f32::MIN, f32::max); // find maximum
     // `.fold()` is like Python's functools.reduce(). Starting from f32::MIN,
     // it applies f32::max to each element, accumulating the result.
 
@@ -490,13 +490,13 @@ pub fn compute_mfccs(
 /// sub bass (rumble), bass (body), low-mids (mud/warmth), mids (vocals/presence),
 /// upper-mids (clarity/harshness), presence (detail/air), brilliance (sparkle).
 pub const FREQUENCY_BANDS: &[(&str, f32, f32)] = &[
-    ("sub_bass",   20.0,    60.0),
-    ("bass",       60.0,   250.0),
-    ("low_mid",   250.0,   500.0),
-    ("mid",       500.0,  2000.0),
-    ("upper_mid", 2000.0,  4000.0),
-    ("presence",  4000.0,  6000.0),
-    ("brilliance",6000.0, 20000.0),
+    ("sub_bass", 20.0, 60.0),
+    ("bass", 60.0, 250.0),
+    ("low_mid", 250.0, 500.0),
+    ("mid", 500.0, 2000.0),
+    ("upper_mid", 2000.0, 4000.0),
+    ("presence", 4000.0, 6000.0),
+    ("brilliance", 6000.0, 20000.0),
 ];
 
 /// Result of frequency band energy analysis.
@@ -519,9 +519,14 @@ pub fn frequency_band_energy(spectrogram: &Spectrogram) -> BandEnergy {
     let band_bins: Vec<(usize, usize)> = FREQUENCY_BANDS
         .iter()
         .map(|&(_, lo, hi)| {
-            let lo_bin = (lo * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
-            let hi_bin = (hi * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
-            (lo_bin.max(0).min(spectrogram.n_freq_bins), hi_bin.max(0).min(spectrogram.n_freq_bins))
+            let lo_bin =
+                (lo * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            let hi_bin =
+                (hi * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            (
+                lo_bin.max(0).min(spectrogram.n_freq_bins),
+                hi_bin.max(0).min(spectrogram.n_freq_bins),
+            )
         })
         .collect();
 
@@ -581,9 +586,14 @@ pub fn spectral_contrast(spectrogram: &Spectrogram, alpha: Option<f32>) -> Spect
     let band_bins: Vec<(usize, usize)> = FREQUENCY_BANDS
         .iter()
         .map(|&(_, lo, hi)| {
-            let lo_bin = (lo * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
-            let hi_bin = (hi * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
-            (lo_bin.max(0).min(spectrogram.n_freq_bins), hi_bin.max(0).min(spectrogram.n_freq_bins))
+            let lo_bin =
+                (lo * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            let hi_bin =
+                (hi * spectrogram.n_fft as f32 / spectrogram.sample_rate as f32).round() as usize;
+            (
+                lo_bin.max(0).min(spectrogram.n_freq_bins),
+                hi_bin.max(0).min(spectrogram.n_freq_bins),
+            )
         })
         .collect();
 
@@ -659,8 +669,8 @@ mod tests {
     fn test_hann_window() {
         let w = hann_window(4);
         // Hann window: edges should be near zero, middle should be near 1
-        assert!(w[0] < 0.01);           // first sample ≈ 0
-        assert!(w[3] < 0.01);           // last sample ≈ 0
+        assert!(w[0] < 0.01); // first sample ≈ 0
+        assert!(w[3] < 0.01); // last sample ≈ 0
         assert!((w[1] - 0.75).abs() < 0.01); // known value for size=4
         assert!((w[2] - 0.75).abs() < 0.01);
     }
@@ -807,7 +817,9 @@ mod tests {
                 assert!(
                     low_mid_energy > energy,
                     "440 Hz sine: low_mid band should dominate, but band {} ({:.6}) >= low_mid ({:.6})",
-                    i, energy, low_mid_energy
+                    i,
+                    energy,
+                    low_mid_energy
                 );
             }
         }
@@ -828,7 +840,9 @@ mod tests {
                 assert!(
                     presence_energy > energy,
                     "5000 Hz sine: presence band should dominate, but band {} ({:.6}) >= presence ({:.6})",
-                    i, energy, presence_energy
+                    i,
+                    energy,
+                    presence_energy
                 );
             }
         }

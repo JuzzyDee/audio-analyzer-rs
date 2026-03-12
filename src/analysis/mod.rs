@@ -8,10 +8,12 @@
 
 // Declare submodules. Each `pub mod X;` tells Rust:
 // "there's a file called X.rs in this directory, make it publicly accessible"
-pub mod spectral;
-pub mod harmonic;
-pub mod rhythm;
-pub mod temporal;
-pub mod percussive;
-pub mod stereo;
+pub mod compare;
 pub mod downsample;
+pub mod harmonic;
+pub mod percussive;
+pub mod rhythm;
+pub mod sections;
+pub mod spectral;
+pub mod stereo;
+pub mod temporal;

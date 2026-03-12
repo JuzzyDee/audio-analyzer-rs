@@ -47,7 +47,7 @@ pub struct RhythmAnalysis {
 /// This is the foundation for both tempo estimation and beat tracking.
 ///
 /// Python equivalent: librosa.onset.onset_strength()
-fn onset_strength(spectrogram: &Spectrogram) -> Vec<f32> {
+pub(crate) fn onset_strength(spectrogram: &Spectrogram) -> Vec<f32> {
     if spectrogram.n_frames < 2 {
         return vec![0.0; spectrogram.n_frames];
     }
@@ -74,10 +74,7 @@ fn onset_strength(spectrogram: &Spectrogram) -> Vec<f32> {
     }
 
     // Normalise the envelope to 0.0..1.0
-    let max_val = envelope
-        .iter()
-        .cloned()
-        .fold(0.0_f32, f32::max);
+    let max_val = envelope.iter().cloned().fold(0.0_f32, f32::max);
 
     if max_val > 1e-10 {
         for val in &mut envelope {
@@ -99,7 +96,7 @@ fn onset_strength(spectrogram: &Spectrogram) -> Vec<f32> {
 /// avoid octave errors (detecting half or double the tempo).
 ///
 /// Python equivalent: librosa.beat.beat_track() (tempo estimation part)
-fn estimate_tempo(
+pub(crate) fn estimate_tempo(
     onset_env: &[f32],
     sample_rate: u32,
     hop_length: usize,
@@ -193,7 +190,7 @@ fn pick_peaks(envelope: &[f32], threshold: f32, min_spacing: usize) -> Vec<usize
             // Is it far enough from the last detected peak?
             let far_enough = peaks
                 .last()
-                .map_or(true, |&last: &usize| i - last >= min_spacing);
+                .is_none_or(|&last: &usize| i - last >= min_spacing);
             // `.last()` returns Option<&T> — the last element if it exists.
             // `.map_or(default, f)` applies f if Some, returns default if None.
             // So: if no previous peak, always accept; otherwise check spacing.
@@ -297,10 +294,7 @@ pub fn beat_statistics(beat_times: &[f32]) -> Option<BeatStats> {
     // [a, b, c, d] → [a,b], [b,c], [c,d]
     // This is incredibly useful and something Python doesn't have built-in
     // (you'd use zip(list, list[1:]) which allocates a new list).
-    let ibis: Vec<f32> = beat_times
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .collect();
+    let ibis: Vec<f32> = beat_times.windows(2).map(|w| w[1] - w[0]).collect();
 
     let n = ibis.len() as f32;
     let mean_ibi = ibis.iter().sum::<f32>() / n;
@@ -401,7 +395,10 @@ mod tests {
         let spec = compute_spectrogram(&clicks, 44100, None, None);
         let rhythm = analyse_rhythm(&spec, None, None);
 
-        println!("Estimated tempo: {:.1} BPM (confidence: {:.3})", rhythm.tempo_bpm, rhythm.tempo_confidence);
+        println!(
+            "Estimated tempo: {:.1} BPM (confidence: {:.3})",
+            rhythm.tempo_bpm, rhythm.tempo_confidence
+        );
 
         assert!(
             (rhythm.tempo_bpm - 120.0).abs() < 5.0,
@@ -417,7 +414,10 @@ mod tests {
         let spec = compute_spectrogram(&clicks, 44100, None, None);
         let rhythm = analyse_rhythm(&spec, None, None);
 
-        println!("Estimated tempo: {:.1} BPM (confidence: {:.3})", rhythm.tempo_bpm, rhythm.tempo_confidence);
+        println!(
+            "Estimated tempo: {:.1} BPM (confidence: {:.3})",
+            rhythm.tempo_bpm, rhythm.tempo_confidence
+        );
 
         assert!(
             (rhythm.tempo_bpm - 92.0).abs() < 5.0,
@@ -435,7 +435,10 @@ mod tests {
         assert_eq!(stats.beat_count, 7);
         assert!((stats.mean_ibi - 0.5).abs() < 0.01);
         assert!((stats.mean_bpm - 120.0).abs() < 1.0);
-        assert!(stats.tempo_stability > 0.95, "Perfect tempo should have high stability");
+        assert!(
+            stats.tempo_stability > 0.95,
+            "Perfect tempo should have high stability"
+        );
     }
 
     #[test]

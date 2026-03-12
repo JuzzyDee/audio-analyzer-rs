@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 // mcp_server.rs — MCP server binary
 //
 // When Claude Code connects to this server, it discovers our audio analysis
@@ -13,7 +14,7 @@ use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_router, tool_handler,
+    schemars, tool, tool_handler, tool_router,
 };
 // `rmcp::schemars` re-exports schemars so we use the same version rmcp expects.
 // `tool` is the attribute macro for marking methods as MCP tools.
@@ -22,14 +23,18 @@ use rmcp::{
 use serde::Deserialize;
 
 // Import our analysis library
+use audio_visualizer_rs::analysis::{
+    compare, downsample, harmonic, percussive, rhythm, sections, spectral, stereo, temporal,
+};
 use audio_visualizer_rs::{load_audio, load_audio_stereo};
-use audio_visualizer_rs::analysis::{spectral, harmonic, rhythm, temporal, percussive, stereo, downsample};
 
 // ---- Lenient numeric deserialization ----
 // Models sometimes send numbers as strings (e.g. "110" instead of 110).
 // These helpers accept either form so tool calls don't fail on type mismatch.
 
-fn deserialize_lenient_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+fn deserialize_lenient_f32<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<f32>, D::Error> {
     use serde::de;
     struct LenientF32;
     impl<'de> de::Visitor<'de> for LenientF32 {
@@ -37,11 +42,21 @@ fn deserialize_lenient_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Opt
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             write!(f, "a number or numeric string")
         }
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { Ok(Some(v as f32)) }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { Ok(Some(v as f32)) }
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> { Ok(Some(v as f32)) }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v as f32))
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v as f32))
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(Some(v as f32))
+        }
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
             v.parse::<f32>().map(Some).map_err(de::Error::custom)
         }
@@ -49,7 +64,9 @@ fn deserialize_lenient_f32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Opt
     d.deserialize_any(LenientF32)
 }
 
-fn deserialize_lenient_usize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<usize>, D::Error> {
+fn deserialize_lenient_usize<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<usize>, D::Error> {
     use serde::de;
     struct LenientUsize;
     impl<'de> de::Visitor<'de> for LenientUsize {
@@ -57,10 +74,18 @@ fn deserialize_lenient_usize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<O
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             write!(f, "an integer or numeric string")
         }
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> { Ok(None) }
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> { Ok(Some(v as usize)) }
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> { Ok(Some(v as usize)) }
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v as usize))
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v as usize))
+        }
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
             v.parse::<usize>().map(Some).map_err(de::Error::custom)
         }
@@ -145,6 +170,14 @@ struct FullAnalysisParams {
     end_time: Option<f32>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CompareParams {
+    /// Absolute path to the first audio file (your mix / Track A)
+    path_a: String,
+    /// Absolute path to the second audio file (the reference / Track B)
+    path_b: String,
+}
+
 // ---- The MCP Server ----
 
 #[derive(Debug, Clone)]
@@ -199,13 +232,13 @@ fn load_and_analyse(
     audio.samples = audio.samples[start_sample..end_sample].to_vec();
     audio.duration = audio.samples.len() as f64 / audio.sample_rate as f64;
 
-    let spectrogram = spectral::compute_spectrogram(
-        &audio.samples,
-        audio.sample_rate,
-        n_fft,
-        hop_length,
-    );
-    Ok(AnalysisInput { audio, spectrogram, time_offset })
+    let spectrogram =
+        spectral::compute_spectrogram(&audio.samples, audio.sample_rate, n_fft, hop_length);
+    Ok(AnalysisInput {
+        audio,
+        spectrogram,
+        time_offset,
+    })
 }
 
 /// Load stereo audio with optional time slicing. Returns (left, right, channels, sample_rate).
@@ -269,32 +302,53 @@ fn format_platform_diff(measured: f32, target: f32) -> String {
 // The rmcp framework handles the async wrapping.
 #[tool_router]
 impl AudioAnalyzerServer {
-
-    #[tool(description = "Get basic information about an audio file (duration, sample rate, sample count). Quick and cheap — use this first to confirm the file is readable and see how long it is before running heavier analysis.")]
+    #[tool(
+        description = "Get basic information about an audio file (duration, sample rate, sample count). Quick and cheap — use this first to confirm the file is readable and see how long it is before running heavier analysis."
+    )]
     fn audio_info(&self, Parameters(params): Parameters<AudioInfoParams>) -> String {
         match load_audio(&params.path) {
             Ok(audio) => {
                 format!(
                     "File: {}\nSample rate: {} Hz\nSamples: {}\nDuration: {:.2} seconds",
-                    params.path, audio.sample_rate, audio.len(), audio.duration,
+                    params.path,
+                    audio.sample_rate,
+                    audio.len(),
+                    audio.duration,
                 )
             }
             Err(e) => format!("Error: {}", e),
         }
     }
 
-    #[tool(description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, stereo width, balance, mono compatibility), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(
+        description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, stereo width, balance, mono compatibility), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections."
+    )]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
-        match load_and_analyse(&params.path, params.n_fft, params.hop_length, params.start_time, params.end_time) {
-            Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
+        match load_and_analyse(
+            &params.path,
+            params.n_fft,
+            params.hop_length,
+            params.start_time,
+            params.end_time,
+        ) {
+            Ok(AnalysisInput {
+                audio,
+                spectrogram,
+                time_offset,
+            }) => {
                 let centroid = spectral::spectral_centroid(&spectrogram);
                 let bandwidth = spectral::spectral_bandwidth(&spectrogram);
                 let rolloff = spectral::spectral_rolloff(&spectrogram, None);
                 let flatness = spectral::spectral_flatness(&spectrogram);
                 let bands = spectral::frequency_band_energy(&spectrogram);
                 let sc = spectral::spectral_contrast(&spectrogram, None);
-                let rms = temporal::rms_energy(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
-                let zcr = temporal::zero_crossing_rate(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let rms =
+                    temporal::rms_energy(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let zcr = temporal::zero_crossing_rate(
+                    &audio.samples,
+                    spectrogram.n_fft,
+                    spectrogram.hop_length,
+                );
                 let mfccs = spectral::compute_mfccs(&spectrogram, None, None);
                 let avg = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
 
@@ -310,7 +364,9 @@ impl AudioAnalyzerServer {
                 for val in &mut avg_mfcc {
                     *val /= mfcc_n;
                 }
-                let mfcc_summary: Vec<String> = avg_mfcc.iter().enumerate()
+                let mfcc_summary: Vec<String> = avg_mfcc
+                    .iter()
+                    .enumerate()
                     .map(|(i, &v)| format!("MFCC-{}: {:.2}", i, v))
                     .collect();
 
@@ -325,8 +381,12 @@ impl AudioAnalyzerServer {
                     *val /= bands.n_frames as f32;
                 }
                 let band_names = spectral::FREQUENCY_BANDS;
-                let band_summary: Vec<String> = band_names.iter().enumerate()
-                    .map(|(i, &(name, lo, hi))| format!("{} ({:.0}–{:.0} Hz): {:.6}", name, lo, hi, avg_bands[i]))
+                let band_summary: Vec<String> = band_names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(name, lo, hi))| {
+                        format!("{} ({:.0}–{:.0} Hz): {:.6}", name, lo, hi, avg_bands[i])
+                    })
                     .collect();
 
                 // Average spectral contrast for summary
@@ -339,14 +399,31 @@ impl AudioAnalyzerServer {
                 for val in &mut avg_contrast {
                     *val /= sc.n_frames as f32;
                 }
-                let contrast_summary: Vec<String> = band_names.iter().enumerate()
-                    .map(|(i, &(name, lo, hi))| format!("{} ({:.0}–{:.0} Hz): {:.1} dB", name, lo, hi, avg_contrast[i]))
+                let contrast_summary: Vec<String> = band_names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(name, lo, hi))| {
+                        format!(
+                            "{} ({:.0}–{:.0} Hz): {:.1} dB",
+                            name, lo, hi, avg_contrast[i]
+                        )
+                    })
                     .collect();
 
-                let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let dr = temporal::dynamic_range(
+                    &audio.samples,
+                    spectrogram.n_fft,
+                    spectrogram.hop_length,
+                );
 
                 // Load stereo for both LUFS (needs L/R per ITU-R BS.1770-4) and stereo analysis
-                let stereo_loaded = load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time).ok();
+                let stereo_loaded = load_stereo_sliced(
+                    &params.path,
+                    audio.sample_rate,
+                    params.start_time,
+                    params.end_time,
+                )
+                .ok();
                 let lufs = if let Some((ref left, ref right, _)) = stereo_loaded {
                     temporal::measure_lufs_stereo(left, right, audio.sample_rate)
                 } else {
@@ -376,27 +453,70 @@ impl AudioAnalyzerServer {
                      Loudness range:  {:.1} LU\n\
                      Spotify (-14):   {} | Apple (-16): {} | YouTube (-14): {}\n",
                     params.path,
-                    spectrogram.duration(), spectrogram.n_frames, spectrogram.n_freq_bins,
+                    spectrogram.duration(),
+                    spectrogram.n_frames,
+                    spectrogram.n_freq_bins,
                     avg(&centroid),
-                    if avg(&centroid) > 3000.0 { "bright/sharp" } else if avg(&centroid) > 1500.0 { "moderate" } else { "dark/warm" },
+                    if avg(&centroid) > 3000.0 {
+                        "bright/sharp"
+                    } else if avg(&centroid) > 1500.0 {
+                        "moderate"
+                    } else {
+                        "dark/warm"
+                    },
                     avg(&bandwidth),
-                    if avg(&bandwidth) > 3000.0 { "wide/complex" } else if avg(&bandwidth) > 1500.0 { "moderate" } else { "narrow/pure" },
+                    if avg(&bandwidth) > 3000.0 {
+                        "wide/complex"
+                    } else if avg(&bandwidth) > 1500.0 {
+                        "moderate"
+                    } else {
+                        "narrow/pure"
+                    },
                     avg(&rolloff),
                     avg(&flatness),
-                    if avg(&flatness) > 0.5 { "noisy" } else if avg(&flatness) > 0.1 { "mixed tonal/noisy" } else { "strongly tonal" },
+                    if avg(&flatness) > 0.5 {
+                        "noisy"
+                    } else if avg(&flatness) > 0.1 {
+                        "mixed tonal/noisy"
+                    } else {
+                        "strongly tonal"
+                    },
                     avg(&rms),
                     avg(&zcr),
-                    if avg(&zcr) > 0.1 { "percussive/noisy" } else if avg(&zcr) > 0.03 { "mixed" } else { "tonal" },
+                    if avg(&zcr) > 0.1 {
+                        "percussive/noisy"
+                    } else if avg(&zcr) > 0.03 {
+                        "mixed"
+                    } else {
+                        "tonal"
+                    },
                     mfcc_summary.join(", "),
                     band_summary.join("\n  "),
                     contrast_summary.join("\n  "),
                     dr.peak_dbfs,
                     dr.overall_crest_db,
-                    if dr.overall_crest_db > 12.0 { "very dynamic" } else if dr.overall_crest_db > 6.0 { "healthy" } else { "compressed" },
+                    if dr.overall_crest_db > 12.0 {
+                        "very dynamic"
+                    } else if dr.overall_crest_db > 6.0 {
+                        "healthy"
+                    } else {
+                        "compressed"
+                    },
                     dr.loudness_range_db,
-                    if dr.loudness_range_db > 12.0 { "very dynamic" } else if dr.loudness_range_db > 6.0 { "moderate" } else if dr.loudness_range_db > 3.0 { "compressed" } else { "brick-walled" },
-                    dr.rms_5th_db, dr.rms_95th_db,
-                    lufs.integrated, lufs.true_peak_dbtp, lufs.loudness_range,
+                    if dr.loudness_range_db > 12.0 {
+                        "very dynamic"
+                    } else if dr.loudness_range_db > 6.0 {
+                        "moderate"
+                    } else if dr.loudness_range_db > 3.0 {
+                        "compressed"
+                    } else {
+                        "brick-walled"
+                    },
+                    dr.rms_5th_db,
+                    dr.rms_95th_db,
+                    lufs.integrated,
+                    lufs.true_peak_dbtp,
+                    lufs.loudness_range,
                     format_platform_diff(lufs.integrated, -14.0),
                     format_platform_diff(lufs.integrated, -16.0),
                     format_platform_diff(lufs.integrated, -14.0),
@@ -405,8 +525,11 @@ impl AudioAnalyzerServer {
                 // Stereo analysis
                 if let Some((left, right, channels)) = stereo_loaded {
                     let stereo_result = stereo::analyse_stereo(
-                        &left, &right, channels,
-                        spectrogram.n_fft, spectrogram.hop_length,
+                        &left,
+                        &right,
+                        channels,
+                        spectrogram.n_fft,
+                        spectrogram.hop_length,
                     );
                     let stereo_sum = stereo::stereo_summary(&stereo_result);
                     result.push_str("\n── Stereo Field ──\n");
@@ -416,16 +539,26 @@ impl AudioAnalyzerServer {
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
-                            let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
-                            let mut ds_centroid = downsample::downsample_f32(&centroid, fps, target_fps);
-                            let mut ds_bandwidth = downsample::downsample_f32(&bandwidth, fps, target_fps);
-                            let mut ds_rolloff = downsample::downsample_f32(&rolloff, fps, target_fps);
-                            let mut ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
+                            let fps = downsample::native_fps(
+                                spectrogram.sample_rate,
+                                spectrogram.hop_length,
+                            );
+                            let mut ds_centroid =
+                                downsample::downsample_f32(&centroid, fps, target_fps);
+                            let mut ds_bandwidth =
+                                downsample::downsample_f32(&bandwidth, fps, target_fps);
+                            let mut ds_rolloff =
+                                downsample::downsample_f32(&rolloff, fps, target_fps);
+                            let mut ds_flatness =
+                                downsample::downsample_f32(&flatness, fps, target_fps);
                             let mut ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
                             let mut ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
-                            let mut ds_crest = downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
-                            let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
-                            let mut ds_contrast = downsample::downsample_array(&sc.contrast, fps, target_fps);
+                            let mut ds_crest =
+                                downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
+                            let mut ds_bands =
+                                downsample::downsample_array(&bands.band_energies, fps, target_fps);
+                            let mut ds_contrast =
+                                downsample::downsample_array(&sc.contrast, fps, target_fps);
                             offset_times(&mut ds_centroid, time_offset);
                             offset_times(&mut ds_bandwidth, time_offset);
                             offset_times(&mut ds_rolloff, time_offset);
@@ -437,17 +570,38 @@ impl AudioAnalyzerServer {
                             offset_times_array(&mut ds_contrast, time_offset);
                             result.push_str(&downsample::format_f32_series(
                                 "Spectral/Temporal Features Over Time",
-                                &["centroid_hz", "bandwidth_hz", "rolloff_hz", "flatness", "rms", "zcr", "crest_db"],
-                                &[&ds_centroid, &ds_bandwidth, &ds_rolloff, &ds_flatness, &ds_rms, &ds_zcr, &ds_crest],
+                                &[
+                                    "centroid_hz",
+                                    "bandwidth_hz",
+                                    "rolloff_hz",
+                                    "flatness",
+                                    "rms",
+                                    "zcr",
+                                    "crest_db",
+                                ],
+                                &[
+                                    &ds_centroid,
+                                    &ds_bandwidth,
+                                    &ds_rolloff,
+                                    &ds_flatness,
+                                    &ds_rms,
+                                    &ds_zcr,
+                                    &ds_crest,
+                                ],
                             ));
-                            let band_col_names: Vec<&str> = spectral::FREQUENCY_BANDS.iter().map(|&(name, _, _)| name).collect();
+                            let band_col_names: Vec<&str> = spectral::FREQUENCY_BANDS
+                                .iter()
+                                .map(|&(name, _, _)| name)
+                                .collect();
                             result.push_str(&downsample::format_array_series(
                                 "Frequency Band Energy Over Time",
                                 &band_col_names,
                                 &ds_bands,
                             ));
-                            let contrast_col_names: Vec<&str> = spectral::FREQUENCY_BANDS.iter()
-                                .map(|&(name, _, _)| name).collect();
+                            let contrast_col_names: Vec<&str> = spectral::FREQUENCY_BANDS
+                                .iter()
+                                .map(|&(name, _, _)| name)
+                                .collect();
                             result.push_str(&downsample::format_array_series(
                                 "Spectral Contrast Over Time",
                                 &contrast_col_names,
@@ -464,11 +618,18 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships (tonnetz). Essential for understanding melody, chords, and harmony. Note: key detection uses major/minor profiles only — for modal music, check the pitch class distribution for the actual tonal centre. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(
+        description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships (tonnetz). Essential for understanding melody, chords, and harmony. Note: key detection uses major/minor profiles only — for modal music, check the pitch class distribution for the actual tonal centre. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections."
+    )]
     fn harmonic_analysis(&self, Parameters(params): Parameters<HarmonicParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
-            Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
-                let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
+            Ok(AnalysisInput {
+                audio,
+                spectrogram,
+                time_offset,
+            }) => {
+                let chromagram =
+                    harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
                 let tonnetz = harmonic::compute_tonnetz(&chromagram);
                 let (key, mode, confidence) = chromagram.estimate_key();
 
@@ -483,8 +644,11 @@ impl AudioAnalyzerServer {
                     *val /= n;
                 }
 
-                let pitch_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-                let mut ranked: Vec<(usize, f32)> = avg_chroma.iter().copied().enumerate().collect();
+                let pitch_names = [
+                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                ];
+                let mut ranked: Vec<(usize, f32)> =
+                    avg_chroma.iter().copied().enumerate().collect();
                 ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
                 let mut result = format!(
@@ -495,7 +659,13 @@ impl AudioAnalyzerServer {
                 for (idx, (pc, energy)) in ranked.iter().enumerate() {
                     let bar_len = (energy * 30.0) as usize;
                     let bar: String = "█".repeat(bar_len);
-                    result.push_str(&format!("  {:>2}. {:<2} {:.3} {}\n", idx + 1, pitch_names[*pc], energy, bar));
+                    result.push_str(&format!(
+                        "  {:>2}. {:<2} {:.3} {}\n",
+                        idx + 1,
+                        pitch_names[*pc],
+                        energy,
+                        bar
+                    ));
                 }
 
                 let mut avg_tonnetz = [0.0_f32; 6];
@@ -517,19 +687,33 @@ impl AudioAnalyzerServer {
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
-                            let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
-                            let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
+                            let fps = downsample::native_fps(
+                                spectrogram.sample_rate,
+                                spectrogram.hop_length,
+                            );
+                            let mut ds_chroma =
+                                downsample::downsample_array(&chromagram.chroma, fps, target_fps);
                             offset_times_array(&mut ds_chroma, time_offset);
                             result.push_str(&downsample::format_array_series(
                                 "Chromagram Over Time",
-                                &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"],
+                                &[
+                                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                                ],
                                 &ds_chroma,
                             ));
-                            let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
+                            let mut ds_tonnetz =
+                                downsample::downsample_array(&tonnetz, fps, target_fps);
                             offset_times_array(&mut ds_tonnetz, time_offset);
                             result.push_str(&downsample::format_array_series(
                                 "Tonnetz Over Time",
-                                &["fifth_sin", "fifth_cos", "min3_sin", "min3_cos", "maj3_sin", "maj3_cos"],
+                                &[
+                                    "fifth_sin",
+                                    "fifth_cos",
+                                    "min3_sin",
+                                    "min3_cos",
+                                    "maj3_sin",
+                                    "maj3_cos",
+                                ],
                                 &ds_tonnetz,
                             ));
                         }
@@ -543,15 +727,24 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Tempo detection may report half/double time on electronic music or solo instruments — use min_bpm/max_bpm to constrain if needed. Omit resolution for a quick summary; set resolution='low' for onset strength overview; use start_time/end_time with resolution='high' to zoom into specific sections.")]
+    #[tool(
+        description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Tempo detection may report half/double time on electronic music or solo instruments — use min_bpm/max_bpm to constrain if needed. Omit resolution for a quick summary; set resolution='low' for onset strength overview; use start_time/end_time with resolution='high' to zoom into specific sections."
+    )]
     fn rhythm_analysis(&self, Parameters(params): Parameters<RhythmParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
-            Ok(AnalysisInput { audio: _audio, spectrogram, time_offset }) => {
+            Ok(AnalysisInput {
+                audio: _audio,
+                spectrogram,
+                time_offset,
+            }) => {
                 let analysis = rhythm::analyse_rhythm(&spectrogram, params.min_bpm, params.max_bpm);
 
                 let mut result = format!(
                     "Rhythm Analysis: {}\n\nEstimated Tempo: {:.1} BPM (confidence: {:.3})\nDetected Beats: {}\n",
-                    params.path, analysis.tempo_bpm, analysis.tempo_confidence, analysis.beat_times.len(),
+                    params.path,
+                    analysis.tempo_bpm,
+                    analysis.tempo_confidence,
+                    analysis.beat_times.len(),
                 );
 
                 if let Some(stats) = rhythm::beat_statistics(&analysis.beat_times) {
@@ -563,15 +756,25 @@ impl AudioAnalyzerServer {
 
                 if !analysis.beat_times.is_empty() {
                     let show = analysis.beat_times.len().min(20);
-                    let beats: Vec<String> = analysis.beat_times[..show].iter().map(|t| format!("{:.2}s", t + time_offset)).collect();
+                    let beats: Vec<String> = analysis.beat_times[..show]
+                        .iter()
+                        .map(|t| format!("{:.2}s", t + time_offset))
+                        .collect();
                     result.push_str(&format!("\nFirst {} beats: {}", show, beats.join(", ")));
                 }
 
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
-                            let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
-                            let mut ds_onset = downsample::downsample_f32(&analysis.onset_envelope, fps, target_fps);
+                            let fps = downsample::native_fps(
+                                spectrogram.sample_rate,
+                                spectrogram.hop_length,
+                            );
+                            let mut ds_onset = downsample::downsample_f32(
+                                &analysis.onset_envelope,
+                                fps,
+                                target_fps,
+                            );
                             offset_times(&mut ds_onset, time_offset);
                             result.push_str(&downsample::format_f32_series(
                                 "Onset Strength Over Time",
@@ -589,20 +792,31 @@ impl AudioAnalyzerServer {
         }
     }
 
-    #[tool(description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), and percussive character (attack sharpness, onset density, harmonic/percussive balance). Recommended workflow: start with resolution='low' for a full-file overview, identify interesting sections (drops, transitions, key changes), then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight. Omit resolution entirely for summary stats only.")]
+    #[tool(
+        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: call with no resolution first to get summary + section boundaries, use the boundary timestamps to pick interesting sections, then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight."
+    )]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
 
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
-            Ok(AnalysisInput { audio, spectrogram, time_offset }) => {
+            Ok(AnalysisInput {
+                audio,
+                spectrogram,
+                time_offset,
+            }) => {
                 let centroid = spectral::spectral_centroid(&spectrogram);
                 let bandwidth = spectral::spectral_bandwidth(&spectrogram);
                 let rolloff = spectral::spectral_rolloff(&spectrogram, None);
                 let flatness = spectral::spectral_flatness(&spectrogram);
                 let bands = spectral::frequency_band_energy(&spectrogram);
                 let sc = spectral::spectral_contrast(&spectrogram, None);
-                let rms = temporal::rms_energy(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
-                let zcr = temporal::zero_crossing_rate(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let rms =
+                    temporal::rms_energy(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let zcr = temporal::zero_crossing_rate(
+                    &audio.samples,
+                    spectrogram.n_fft,
+                    spectrogram.hop_length,
+                );
                 let mfccs = spectral::compute_mfccs(&spectrogram, None, None);
                 let avg = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
 
@@ -641,11 +855,14 @@ impl AudioAnalyzerServer {
                     *val /= sc.n_frames as f32;
                 }
 
-                let chromagram = harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
+                let chromagram =
+                    harmonic::compute_chromagram(&audio.samples, audio.sample_rate, &spectrogram);
                 let tonnetz = harmonic::compute_tonnetz(&chromagram);
                 let (key, mode, key_confidence) = chromagram.estimate_key();
 
-                let pitch_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+                let pitch_names = [
+                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                ];
                 let mut avg_chroma = [0.0_f32; 12];
                 for frame in &chromagram.chroma {
                     for (i, &val) in frame.iter().enumerate() {
@@ -656,20 +873,35 @@ impl AudioAnalyzerServer {
                 for val in &mut avg_chroma {
                     *val /= n;
                 }
-                let mut ranked: Vec<(usize, f32)> = avg_chroma.iter().copied().enumerate().collect();
+                let mut ranked: Vec<(usize, f32)> =
+                    avg_chroma.iter().copied().enumerate().collect();
                 ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
                 let rhythm_result = rhythm::analyse_rhythm(&spectrogram, None, None);
                 let beat_stats = rhythm::beat_statistics(&rhythm_result.beat_times);
 
                 let hpss_result = percussive::hpss(&spectrogram, None);
-                let perc_feats = percussive::percussive_features(&hpss_result, audio.sample_rate, spectrogram.hop_length);
+                let perc_feats = percussive::percussive_features(
+                    &hpss_result,
+                    audio.sample_rate,
+                    spectrogram.hop_length,
+                );
 
-                let dr = temporal::dynamic_range(&audio.samples, spectrogram.n_fft, spectrogram.hop_length);
+                let dr = temporal::dynamic_range(
+                    &audio.samples,
+                    spectrogram.n_fft,
+                    spectrogram.hop_length,
+                );
 
                 // Load stereo early — needed for correct LUFS (ITU-R BS.1770-4 sums L/R power)
                 // and for stereo analysis + time-series
-                let stereo_loaded = load_stereo_sliced(&params.path, audio.sample_rate, params.start_time, params.end_time).ok();
+                let stereo_loaded = load_stereo_sliced(
+                    &params.path,
+                    audio.sample_rate,
+                    params.start_time,
+                    params.end_time,
+                )
+                .ok();
                 let lufs = if let Some((ref left, ref right, _)) = stereo_loaded {
                     temporal::measure_lufs_stereo(left, right, audio.sample_rate)
                 } else {
@@ -678,7 +910,10 @@ impl AudioAnalyzerServer {
 
                 let elapsed = start.elapsed();
 
-                let section_info = if time_offset > 0.0 || params.start_time.is_some() || params.end_time.is_some() {
+                let section_info = if time_offset > 0.0
+                    || params.start_time.is_some()
+                    || params.end_time.is_some()
+                {
                     let end_t = time_offset + audio.duration as f32;
                     format!("Section: {:.1}s–{:.1}s | ", time_offset, end_t)
                 } else {
@@ -717,34 +952,87 @@ impl AudioAnalyzerServer {
                      ── Harmonic Content ──\n\
                      Estimated key: {} {} (confidence: {:.3})\n\
                      Top pitch classes:\n",
-                    params.path, section_info, audio.duration, audio.sample_rate, audio.len(), elapsed,
+                    params.path,
+                    section_info,
+                    audio.duration,
+                    audio.sample_rate,
+                    audio.len(),
+                    elapsed,
                     avg(&centroid),
-                    if avg(&centroid) > 3000.0 { "bright" } else if avg(&centroid) > 1500.0 { "moderate" } else { "warm/dark" },
+                    if avg(&centroid) > 3000.0 {
+                        "bright"
+                    } else if avg(&centroid) > 1500.0 {
+                        "moderate"
+                    } else {
+                        "warm/dark"
+                    },
                     avg(&bandwidth),
-                    if avg(&bandwidth) > 3000.0 { "complex" } else if avg(&bandwidth) > 1500.0 { "moderate" } else { "pure/simple" },
+                    if avg(&bandwidth) > 3000.0 {
+                        "complex"
+                    } else if avg(&bandwidth) > 1500.0 {
+                        "moderate"
+                    } else {
+                        "pure/simple"
+                    },
                     avg(&rolloff),
                     avg(&flatness),
-                    if avg(&flatness) > 0.5 { "noisy" } else if avg(&flatness) > 0.1 { "mixed" } else { "strongly tonal" },
+                    if avg(&flatness) > 0.5 {
+                        "noisy"
+                    } else if avg(&flatness) > 0.1 {
+                        "mixed"
+                    } else {
+                        "strongly tonal"
+                    },
                     avg(&rms),
                     avg(&zcr),
-                    if avg(&zcr) > 0.1 { "percussive/noisy" } else if avg(&zcr) > 0.03 { "mixed" } else { "tonal" },
-                    avg_mfcc.iter().map(|v| format!("{:.1}", v)).collect::<Vec<_>>().join(", "),
-                    avg_bands[0], avg_bands[1], avg_bands[2], avg_bands[3],
-                    avg_bands[4], avg_bands[5], avg_bands[6],
-                    avg_contrast[0], avg_contrast[1], avg_contrast[2], avg_contrast[3],
-                    avg_contrast[4], avg_contrast[5], avg_contrast[6],
-                    key, mode, key_confidence,
+                    if avg(&zcr) > 0.1 {
+                        "percussive/noisy"
+                    } else if avg(&zcr) > 0.03 {
+                        "mixed"
+                    } else {
+                        "tonal"
+                    },
+                    avg_mfcc
+                        .iter()
+                        .map(|v| format!("{:.1}", v))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    avg_bands[0],
+                    avg_bands[1],
+                    avg_bands[2],
+                    avg_bands[3],
+                    avg_bands[4],
+                    avg_bands[5],
+                    avg_bands[6],
+                    avg_contrast[0],
+                    avg_contrast[1],
+                    avg_contrast[2],
+                    avg_contrast[3],
+                    avg_contrast[4],
+                    avg_contrast[5],
+                    avg_contrast[6],
+                    key,
+                    mode,
+                    key_confidence,
                 );
 
                 for (idx, (pc, energy)) in ranked.iter().take(6).enumerate() {
                     let bar_len = (energy * 25.0) as usize;
                     let bar: String = "█".repeat(bar_len);
-                    result.push_str(&format!("  {:>2}. {:<2} {:.3} {}\n", idx + 1, pitch_names[*pc], energy, bar));
+                    result.push_str(&format!(
+                        "  {:>2}. {:<2} {:.3} {}\n",
+                        idx + 1,
+                        pitch_names[*pc],
+                        energy,
+                        bar
+                    ));
                 }
 
                 result.push_str(&format!(
                     "\n── Rhythm ──\nTempo: {:.1} BPM (confidence: {:.3})\nBeats detected: {}\n",
-                    rhythm_result.tempo_bpm, rhythm_result.tempo_confidence, rhythm_result.beat_times.len(),
+                    rhythm_result.tempo_bpm,
+                    rhythm_result.tempo_confidence,
+                    rhythm_result.beat_times.len(),
                 ));
 
                 if let Some(stats) = beat_stats {
@@ -757,16 +1045,34 @@ impl AudioAnalyzerServer {
                 // Percussive analysis summary
                 let avg_perc_ratio = avg(&perc_feats.percussive_ratio);
                 let avg_onset_density = avg(&perc_feats.onset_density);
-                let max_sharpness = perc_feats.attack_sharpness.iter().cloned().fold(0.0_f32, f32::max);
+                let max_sharpness = perc_feats
+                    .attack_sharpness
+                    .iter()
+                    .cloned()
+                    .fold(0.0_f32, f32::max);
                 result.push_str(&format!(
                     "\n── Percussive Character ──\n\
                      Percussive ratio:    {:.3} — {}\n\
                      Onset density:       {:.1}/sec — {}\n\
                      Peak attack sharp:   {:.3}\n",
                     avg_perc_ratio,
-                    if avg_perc_ratio > 0.6 { "percussion-dominated" } else if avg_perc_ratio > 0.35 { "balanced" } else { "harmony-dominated" },
+                    if avg_perc_ratio > 0.6 {
+                        "percussion-dominated"
+                    } else if avg_perc_ratio > 0.35 {
+                        "balanced"
+                    } else {
+                        "harmony-dominated"
+                    },
                     avg_onset_density,
-                    if avg_onset_density > 4.0 { "very dense" } else if avg_onset_density > 2.0 { "moderate" } else if avg_onset_density > 0.5 { "sparse" } else { "minimal" },
+                    if avg_onset_density > 4.0 {
+                        "very dense"
+                    } else if avg_onset_density > 2.0 {
+                        "moderate"
+                    } else if avg_onset_density > 0.5 {
+                        "sparse"
+                    } else {
+                        "minimal"
+                    },
                     max_sharpness,
                 ));
 
@@ -779,10 +1085,25 @@ impl AudioAnalyzerServer {
                      Quiet sections:  {:.1} dBFS | Loud sections: {:.1} dBFS\n",
                     dr.peak_dbfs,
                     dr.overall_crest_db,
-                    if dr.overall_crest_db > 12.0 { "very dynamic" } else if dr.overall_crest_db > 6.0 { "healthy" } else { "compressed" },
+                    if dr.overall_crest_db > 12.0 {
+                        "very dynamic"
+                    } else if dr.overall_crest_db > 6.0 {
+                        "healthy"
+                    } else {
+                        "compressed"
+                    },
                     dr.loudness_range_db,
-                    if dr.loudness_range_db > 12.0 { "very dynamic" } else if dr.loudness_range_db > 6.0 { "moderate" } else if dr.loudness_range_db > 3.0 { "compressed" } else { "brick-walled" },
-                    dr.rms_5th_db, dr.rms_95th_db,
+                    if dr.loudness_range_db > 12.0 {
+                        "very dynamic"
+                    } else if dr.loudness_range_db > 6.0 {
+                        "moderate"
+                    } else if dr.loudness_range_db > 3.0 {
+                        "compressed"
+                    } else {
+                        "brick-walled"
+                    },
+                    dr.rms_5th_db,
+                    dr.rms_95th_db,
                 ));
 
                 // LUFS loudness summary
@@ -792,71 +1113,127 @@ impl AudioAnalyzerServer {
                      True peak:       {:.1} dBTP\n\
                      Loudness range:  {:.1} LU\n\
                      Spotify (-14):   {} | Apple (-16): {} | YouTube (-14): {}\n",
-                    lufs.integrated, lufs.true_peak_dbtp, lufs.loudness_range,
+                    lufs.integrated,
+                    lufs.true_peak_dbtp,
+                    lufs.loudness_range,
                     format_platform_diff(lufs.integrated, -14.0),
                     format_platform_diff(lufs.integrated, -16.0),
                     format_platform_diff(lufs.integrated, -14.0),
                 ));
 
                 // Stereo analysis — reuse the stereo data already loaded for LUFS
-                let stereo_data = stereo_loaded
-                    .map(|(left, right, channels)| {
-                        stereo::analyse_stereo(
-                            &left, &right, channels,
-                            spectrogram.n_fft, spectrogram.hop_length,
-                        )
-                    });
+                let stereo_data = stereo_loaded.map(|(left, right, channels)| {
+                    stereo::analyse_stereo(
+                        &left,
+                        &right,
+                        channels,
+                        spectrogram.n_fft,
+                        spectrogram.hop_length,
+                    )
+                });
 
                 if let Some(ref stereo_result) = stereo_data {
                     let stereo_sum = stereo::stereo_summary(stereo_result);
                     result.push_str("\n── Stereo Field ──\n");
-                    result.push_str(&stereo::format_stereo_summary(&stereo_sum, stereo_result.source_channels));
+                    result.push_str(&stereo::format_stereo_summary(
+                        &stereo_sum,
+                        stereo_result.source_channels,
+                    ));
+                }
+
+                // Section boundary detection — only for full-track analysis,
+                // not zoomed-in sections (where boundaries aren't meaningful)
+                if params.start_time.is_none() && params.end_time.is_none() {
+                    let section_result =
+                        sections::detect_sections(&spectrogram, Some(&chromagram), None);
+                    if !section_result.boundaries.is_empty() {
+                        result.push_str("\n── Section Boundaries ──\n");
+                        result.push_str(&sections::format_sections(&section_result));
+                    }
                 }
 
                 // Append unified time-series table if resolution was requested
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
                         Ok(target_fps) => {
-                            let fps = downsample::native_fps(spectrogram.sample_rate, spectrogram.hop_length);
+                            let fps = downsample::native_fps(
+                                spectrogram.sample_rate,
+                                spectrogram.hop_length,
+                            );
 
-                            let mut ds_centroid = downsample::downsample_f32(&centroid, fps, target_fps);
-                            let mut ds_bandwidth = downsample::downsample_f32(&bandwidth, fps, target_fps);
-                            let mut ds_rolloff = downsample::downsample_f32(&rolloff, fps, target_fps);
-                            let mut ds_flatness = downsample::downsample_f32(&flatness, fps, target_fps);
+                            let mut ds_centroid =
+                                downsample::downsample_f32(&centroid, fps, target_fps);
+                            let mut ds_bandwidth =
+                                downsample::downsample_f32(&bandwidth, fps, target_fps);
+                            let mut ds_rolloff =
+                                downsample::downsample_f32(&rolloff, fps, target_fps);
+                            let mut ds_flatness =
+                                downsample::downsample_f32(&flatness, fps, target_fps);
                             let mut ds_rms = downsample::downsample_f32(&rms, fps, target_fps);
                             let mut ds_zcr = downsample::downsample_f32(&zcr, fps, target_fps);
-                            let mut ds_onset = downsample::downsample_f32(&rhythm_result.onset_envelope, fps, target_fps);
-                            let mut ds_perc_ratio = downsample::downsample_f32(&perc_feats.percussive_ratio, fps, target_fps);
-                            let mut ds_attack = downsample::downsample_f32(&perc_feats.attack_sharpness, fps, target_fps);
-                            let mut ds_density = downsample::downsample_f32(&perc_feats.onset_density, fps, target_fps);
-                            let mut ds_crest = downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
+                            let mut ds_onset = downsample::downsample_f32(
+                                &rhythm_result.onset_envelope,
+                                fps,
+                                target_fps,
+                            );
+                            let mut ds_perc_ratio = downsample::downsample_f32(
+                                &perc_feats.percussive_ratio,
+                                fps,
+                                target_fps,
+                            );
+                            let mut ds_attack = downsample::downsample_f32(
+                                &perc_feats.attack_sharpness,
+                                fps,
+                                target_fps,
+                            );
+                            let mut ds_density = downsample::downsample_f32(
+                                &perc_feats.onset_density,
+                                fps,
+                                target_fps,
+                            );
+                            let mut ds_crest =
+                                downsample::downsample_f32(&dr.crest_factor_db, fps, target_fps);
 
                             // Stereo time-series (if available)
                             let ds_phase_corr = stereo_data.as_ref().map(|s| {
-                                let mut ds = downsample::downsample_f32(&s.phase_correlation, fps, target_fps);
+                                let mut ds = downsample::downsample_f32(
+                                    &s.phase_correlation,
+                                    fps,
+                                    target_fps,
+                                );
                                 offset_times(&mut ds, time_offset);
                                 ds
                             });
                             let ds_stereo_width = stereo_data.as_ref().map(|s| {
-                                let mut ds = downsample::downsample_f32(&s.stereo_width, fps, target_fps);
+                                let mut ds =
+                                    downsample::downsample_f32(&s.stereo_width, fps, target_fps);
                                 offset_times(&mut ds, time_offset);
                                 ds
                             });
                             let ds_balance = stereo_data.as_ref().map(|s| {
-                                let mut ds = downsample::downsample_f32(&s.balance, fps, target_fps);
+                                let mut ds =
+                                    downsample::downsample_f32(&s.balance, fps, target_fps);
                                 offset_times(&mut ds, time_offset);
                                 ds
                             });
                             let ds_mono_compat = stereo_data.as_ref().map(|s| {
-                                let mut ds = downsample::downsample_f32(&s.mono_compatibility, fps, target_fps);
+                                let mut ds = downsample::downsample_f32(
+                                    &s.mono_compatibility,
+                                    fps,
+                                    target_fps,
+                                );
                                 offset_times(&mut ds, time_offset);
                                 ds
                             });
 
-                            let mut ds_chroma = downsample::downsample_array(&chromagram.chroma, fps, target_fps);
-                            let mut ds_tonnetz = downsample::downsample_array(&tonnetz, fps, target_fps);
-                            let mut ds_bands = downsample::downsample_array(&bands.band_energies, fps, target_fps);
-                            let mut ds_contrast = downsample::downsample_array(&sc.contrast, fps, target_fps);
+                            let mut ds_chroma =
+                                downsample::downsample_array(&chromagram.chroma, fps, target_fps);
+                            let mut ds_tonnetz =
+                                downsample::downsample_array(&tonnetz, fps, target_fps);
+                            let mut ds_bands =
+                                downsample::downsample_array(&bands.band_energies, fps, target_fps);
+                            let mut ds_contrast =
+                                downsample::downsample_array(&sc.contrast, fps, target_fps);
 
                             offset_times(&mut ds_centroid, time_offset);
                             offset_times(&mut ds_bandwidth, time_offset);
@@ -874,10 +1251,23 @@ impl AudioAnalyzerServer {
                             offset_times_array(&mut ds_bands, time_offset);
                             offset_times_array(&mut ds_contrast, time_offset);
 
-                            let chroma_cols: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-                            let tonnetz_cols: &[&str] = &["fifth_sin", "fifth_cos", "min3_sin", "min3_cos", "maj3_sin", "maj3_cos"];
-                            let band_cols: Vec<&str> = spectral::FREQUENCY_BANDS.iter().map(|&(name, _, _)| name).collect();
-                            let contrast_cols: Vec<&str> = spectral::FREQUENCY_BANDS.iter()
+                            let chroma_cols: &[&str] = &[
+                                "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                            ];
+                            let tonnetz_cols: &[&str] = &[
+                                "fifth_sin",
+                                "fifth_cos",
+                                "min3_sin",
+                                "min3_cos",
+                                "maj3_sin",
+                                "maj3_cos",
+                            ];
+                            let band_cols: Vec<&str> = spectral::FREQUENCY_BANDS
+                                .iter()
+                                .map(|&(name, _, _)| name)
+                                .collect();
+                            let contrast_cols: Vec<&str> = spectral::FREQUENCY_BANDS
+                                .iter()
                                 .map(|&(name, _, _)| {
                                     // Prefix with "sc_" to distinguish from band energy columns
                                     match name {
@@ -890,14 +1280,16 @@ impl AudioAnalyzerServer {
                                         "brilliance" => "sc_brilliance",
                                         _ => name,
                                     }
-                                }).collect();
+                                })
+                                .collect();
 
                             // Use the minimum length across all series — the chromagram
                             // uses a larger internal FFT (n_fft=8192) so it can produce
                             // fewer frames than the spectrogram, leading to fewer
                             // downsampled points. Without this, indexing out of bounds
                             // panics the tokio task and silently hangs the MCP response.
-                            let n_points = ds_centroid.len()
+                            let n_points = ds_centroid
+                                .len()
                                 .min(ds_chroma.len())
                                 .min(ds_tonnetz.len())
                                 .min(ds_bands.len());
@@ -954,6 +1346,13 @@ impl AudioAnalyzerServer {
             Err(e) => format!("Error: {}", e),
         }
     }
+
+    #[tool(
+        description = "Compare two audio files side by side — your mix vs a reference track. Returns structured deltas for loudness (LUFS, true peak, LRA), dynamics (crest factor, loudness range), spectral balance (7 frequency bands in dB), spectral contrast, tonal character (brightness, richness), stereo field (phase, width, balance, mono compatibility), key, and tempo. No time-series — just the summary metrics that matter for mix comparison, in one compact table. Use this to diagnose how a mix differs from a reference and what to adjust."
+    )]
+    fn compare(&self, Parameters(params): Parameters<CompareParams>) -> String {
+        compare::compare_tracks(&params.path_a, &params.path_b)
+    }
 }
 
 // `#[tool_handler]` generates the `list_tools` and `call_tool` implementations
@@ -963,9 +1362,8 @@ impl AudioAnalyzerServer {
 #[tool_handler]
 impl ServerHandler for AudioAnalyzerServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(
-                "Audio analysis server for examining music files. \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "Audio analysis server for examining music files. \
                  Provides tools for spectral features (including frequency \
                  band energy for mix diagnosis, spectral contrast for \
                  clarity analysis, dynamic range, and LUFS loudness), \
@@ -976,19 +1374,25 @@ impl ServerHandler for AudioAnalyzerServer {
                  This server reads files directly from the local filesystem — \
                  do not ask the user to upload files. Instead, ask them for \
                  the file path on their machine.\n\n\
+                 Use the compare tool to A/B your mix against a reference track — \
+                 it returns one compact diff table instead of two separate analyses.\n\n\
                  Recommended workflow for long tracks (>3 min): start with \
                  full_analysis at \"low\" resolution for an overview, identify \
                  sections of interest (breakdowns, drops, transitions, problem \
                  areas), then call again with start_time/end_time and \"high\" \
                  resolution to zoom in on specific sections. This saves tokens \
                  while giving detailed insight where it matters.\n\n\
+                 Section boundaries are automatically included in full-track \
+                 analysis (no start_time/end_time). They show where the music \
+                 changes structurally — use these timestamps to guide your \
+                 zoom-in calls instead of guessing.\n\n\
                  Key detection uses Krumhansl-Schmuckler profiles which only \
                  know major and minor modes. For modal music (dorian, mixolydian, \
                  etc.), the detected key will be the closest major/minor relative — \
                  check the pitch class distribution for the actual tonal centre. \
                  Tempo detection can report half or double time on electronic music \
-                 and solo instruments."
-            )
+                 and solo instruments.",
+        )
     }
 }
 
@@ -1006,9 +1410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting Audio Analyzer MCP server...");
 
     let server = AudioAnalyzerServer::new();
-    let service = server
-        .serve(rmcp::transport::stdio())
-        .await?;
+    let service = server.serve(rmcp::transport::stdio()).await?;
 
     tracing::info!("Server running. Waiting for requests...");
     service.waiting().await?;

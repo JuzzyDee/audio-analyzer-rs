@@ -9,16 +9,15 @@
 // It's octave-independent — a low C and a high C both contribute to
 // the "C" bin.
 
-use std::f32::consts::PI;
 use super::spectral::Spectrogram;
+use std::f32::consts::PI;
 
 // The 12 pitch class names. This is a constant array — known at compile time.
 // `&str` (string slices) in a `const` live in the binary's read-only data section,
 // so there's zero runtime cost. Unlike Python where even constants are heap-allocated
 // objects that could theoretically be reassigned.
 const PITCH_CLASSES: [&str; 12] = [
-    "C", "C#", "D", "D#", "E", "F",
-    "F#", "G", "G#", "A", "A#", "B",
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
 /// The result of chromagram analysis.
@@ -34,7 +33,6 @@ pub struct Chromagram {
     // on the stack and the compiler knows their size at compile time.
     // Perfect for pitch classes since there are always exactly 12.
     // This is similar to Swift's tuples or fixed-size arrays.
-
     /// Number of time frames
     pub n_frames: usize,
 
@@ -80,15 +78,13 @@ impl Chromagram {
         // Major key profile (starting from C major)
         #[allow(clippy::excessive_precision)]
         let major_profile: [f32; 12] = [
-            6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
-            2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+            6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
         ];
 
         // Minor key profile (starting from C minor)
         #[allow(clippy::excessive_precision)]
         let minor_profile: [f32; 12] = [
-            6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
-            2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+            6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
         ];
 
         // Compute the average chroma vector across all frames.
@@ -239,10 +235,7 @@ pub fn compute_chromagram(
             }
 
             // Normalise so the max value is 1.0 (within each frame).
-            let max_val = chroma_frame
-                .iter()
-                .cloned()
-                .fold(f32::MIN, f32::max);
+            let max_val = chroma_frame.iter().cloned().fold(f32::MIN, f32::max);
 
             if max_val > 1e-10 {
                 for val in &mut chroma_frame {
@@ -353,11 +346,7 @@ mod tests {
         // Check the middle frame
         let mid = chroma.n_frames / 2;
         let (dominant, _) = chroma.dominant_pitch(mid);
-        assert_eq!(
-            dominant, "A",
-            "440 Hz should map to A, got {}",
-            dominant
-        );
+        assert_eq!(dominant, "A", "440 Hz should map to A, got {}", dominant);
     }
 
     #[test]
@@ -369,11 +358,7 @@ mod tests {
 
         let mid = chroma.n_frames / 2;
         let (dominant, _) = chroma.dominant_pitch(mid);
-        assert_eq!(
-            dominant, "C",
-            "261.63 Hz should map to C, got {}",
-            dominant
-        );
+        assert_eq!(dominant, "C", "261.63 Hz should map to C, got {}", dominant);
     }
 
     #[test]
@@ -386,11 +371,7 @@ mod tests {
 
         let mid = chroma.n_frames / 2;
         let (dominant, _) = chroma.dominant_pitch(mid);
-        assert_eq!(
-            dominant, "G",
-            "196 Hz should map to G, got {}",
-            dominant
-        );
+        assert_eq!(dominant, "G", "196 Hz should map to G, got {}", dominant);
     }
 
     #[test]
@@ -402,11 +383,7 @@ mod tests {
 
         let mid = chroma.n_frames / 2;
         let (dominant, _) = chroma.dominant_pitch(mid);
-        assert_eq!(
-            dominant, "G",
-            "392 Hz should map to G, got {}",
-            dominant
-        );
+        assert_eq!(dominant, "G", "392 Hz should map to G, got {}", dominant);
     }
 
     #[test]
@@ -438,7 +415,11 @@ mod tests {
 
         // The algorithm should produce *some* result with positive confidence.
         // With real music (not pure sine waves) this gives accurate results.
-        assert!(score > 0.5, "Confidence score should be meaningful, got {:.3}", score);
+        assert!(
+            score > 0.5,
+            "Confidence score should be meaningful, got {:.3}",
+            score
+        );
         assert!(["major", "minor"].contains(&mode));
         assert!(!key.is_empty());
     }

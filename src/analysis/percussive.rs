@@ -57,18 +57,21 @@ pub struct PercussiveFeatures {
 /// Uses `select_nth_unstable` for O(n) average-case performance instead
 /// of O(n log n) full sort. Critical for HPSS where we compute millions
 /// of medians across the spectrogram.
-fn median(values: &mut Vec<f32>) -> f32 {
+fn median(values: &mut [f32]) -> f32 {
     let len = values.len();
     if len == 0 {
         return 0.0;
     }
     let mid = len / 2;
     values.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
-    if len % 2 == 0 {
+    if len.is_multiple_of(2) {
         // For even length, we need the average of mid-1 and mid.
         // After select_nth at mid, elements before mid are <= values[mid]
         // but not sorted, so find the max of the left partition.
-        let left_max = values[..mid].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let left_max = values[..mid]
+            .iter()
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
         (left_max + values[mid]) / 2.0
     } else {
         values[mid]
@@ -88,7 +91,11 @@ fn median(values: &mut Vec<f32>) -> f32 {
 pub fn hpss(spectrogram: &Spectrogram, kernel_size: Option<usize>) -> HpssResult {
     let kernel = kernel_size.unwrap_or(15);
     // Ensure kernel is odd for symmetric median filtering
-    let kernel = if kernel % 2 == 0 { kernel + 1 } else { kernel };
+    let kernel = if kernel.is_multiple_of(2) {
+        kernel + 1
+    } else {
+        kernel
+    };
     let half_k = kernel / 2;
 
     let n_frames = spectrogram.n_frames;
@@ -217,10 +224,7 @@ pub fn percussive_features(
     }
 
     // Normalise attack sharpness to 0..1
-    let max_sharpness = attack_sharpness
-        .iter()
-        .cloned()
-        .fold(0.0_f32, f32::max);
+    let max_sharpness = attack_sharpness.iter().cloned().fold(0.0_f32, f32::max);
     if max_sharpness > 1e-10 {
         for val in &mut attack_sharpness {
             *val /= max_sharpness;
@@ -243,10 +247,7 @@ pub fn percussive_features(
     let threshold = threshold.max(0.05); // Floor to avoid detecting everything
 
     // Mark onset frames
-    let is_onset: Vec<bool> = attack_sharpness
-        .iter()
-        .map(|&s| s > threshold)
-        .collect();
+    let is_onset: Vec<bool> = attack_sharpness.iter().map(|&s| s > threshold).collect();
 
     // Rolling window of ~2 seconds (centered)
     let window_frames = (2.0 * fps) as usize;
@@ -318,12 +319,8 @@ mod tests {
         let result = hpss(&spec, Some(11));
 
         // Sum total energy in harmonic vs percussive
-        let h_total: f32 = result.harmonic.iter()
-            .flat_map(|f| f.iter())
-            .sum();
-        let p_total: f32 = result.percussive.iter()
-            .flat_map(|f| f.iter())
-            .sum();
+        let h_total: f32 = result.harmonic.iter().flat_map(|f| f.iter()).sum();
+        let p_total: f32 = result.percussive.iter().flat_map(|f| f.iter()).sum();
 
         let ratio = h_total / (h_total + p_total);
         assert!(
@@ -340,12 +337,8 @@ mod tests {
         let spec = compute_spectrogram(&samples, 44100, None, None);
         let result = hpss(&spec, Some(11));
 
-        let h_total: f32 = result.harmonic.iter()
-            .flat_map(|f| f.iter())
-            .sum();
-        let p_total: f32 = result.percussive.iter()
-            .flat_map(|f| f.iter())
-            .sum();
+        let h_total: f32 = result.harmonic.iter().flat_map(|f| f.iter()).sum();
+        let p_total: f32 = result.percussive.iter().flat_map(|f| f.iter()).sum();
 
         let ratio = p_total / (h_total + p_total);
         assert!(
@@ -375,8 +368,8 @@ mod tests {
         let result = hpss(&spec, Some(11));
         let feats = percussive_features(&result, 44100, 512);
 
-        let avg_ratio: f32 = feats.percussive_ratio.iter().sum::<f32>()
-            / feats.percussive_ratio.len() as f32;
+        let avg_ratio: f32 =
+            feats.percussive_ratio.iter().sum::<f32>() / feats.percussive_ratio.len() as f32;
         assert!(
             avg_ratio < 0.5,
             "Sine wave should have low percussive ratio, got {:.3}",
@@ -392,8 +385,8 @@ mod tests {
         let result = hpss(&spec, Some(11));
         let feats = percussive_features(&result, 44100, 512);
 
-        let avg_density: f32 = feats.onset_density.iter().sum::<f32>()
-            / feats.onset_density.len() as f32;
+        let avg_density: f32 =
+            feats.onset_density.iter().sum::<f32>() / feats.onset_density.len() as f32;
         assert!(
             avg_density > 0.5,
             "Click track should have detectable onset density, got {:.3}/sec",
@@ -410,7 +403,11 @@ mod tests {
 
         // All values should be in 0..1
         for &val in &feats.attack_sharpness {
-            assert!(val >= 0.0 && val <= 1.0, "Attack sharpness out of range: {}", val);
+            assert!(
+                val >= 0.0 && val <= 1.0,
+                "Attack sharpness out of range: {}",
+                val
+            );
         }
     }
 
