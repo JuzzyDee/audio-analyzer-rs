@@ -538,11 +538,27 @@ impl AudioAnalyzerServer {
 
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
-                        Ok(target_fps) => {
+                        Ok(mut target_fps) => {
                             let fps = downsample::native_fps(
                                 spectrogram.sample_rate,
                                 spectrogram.hop_length,
                             );
+
+                            const MAX_ROWS: usize = 800;
+                            let expected_rows =
+                                (audio.duration as f32 * target_fps).ceil() as usize;
+                            if expected_rows > MAX_ROWS {
+                                let original_fps = target_fps;
+                                target_fps = MAX_ROWS as f32 / audio.duration as f32;
+                                result.push_str(&format!(
+                                    "\n⚠ Resolution auto-reduced from {:.1} to \
+                                     {:.1} pts/sec ({} row cap) to fit context \
+                                     window. Zoom into a shorter section with \
+                                     start_time/end_time for higher detail.\n",
+                                    original_fps, target_fps, MAX_ROWS,
+                                ));
+                            }
+
                             let mut ds_centroid =
                                 downsample::downsample_f32(&centroid, fps, target_fps);
                             let mut ds_bandwidth =
@@ -686,11 +702,27 @@ impl AudioAnalyzerServer {
 
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
-                        Ok(target_fps) => {
+                        Ok(mut target_fps) => {
                             let fps = downsample::native_fps(
                                 spectrogram.sample_rate,
                                 spectrogram.hop_length,
                             );
+
+                            const MAX_ROWS: usize = 800;
+                            let expected_rows =
+                                (audio.duration as f32 * target_fps).ceil() as usize;
+                            if expected_rows > MAX_ROWS {
+                                let original_fps = target_fps;
+                                target_fps = MAX_ROWS as f32 / audio.duration as f32;
+                                result.push_str(&format!(
+                                    "\n⚠ Resolution auto-reduced from {:.1} to \
+                                     {:.1} pts/sec ({} row cap) to fit context \
+                                     window. Zoom into a shorter section with \
+                                     start_time/end_time for higher detail.\n",
+                                    original_fps, target_fps, MAX_ROWS,
+                                ));
+                            }
+
                             let mut ds_chroma =
                                 downsample::downsample_array(&chromagram.chroma, fps, target_fps);
                             offset_times_array(&mut ds_chroma, time_offset);
@@ -733,7 +765,7 @@ impl AudioAnalyzerServer {
     fn rhythm_analysis(&self, Parameters(params): Parameters<RhythmParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
             Ok(AnalysisInput {
-                audio: _audio,
+                audio,
                 spectrogram,
                 time_offset,
             }) => {
@@ -765,11 +797,27 @@ impl AudioAnalyzerServer {
 
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
-                        Ok(target_fps) => {
+                        Ok(mut target_fps) => {
                             let fps = downsample::native_fps(
                                 spectrogram.sample_rate,
                                 spectrogram.hop_length,
                             );
+
+                            const MAX_ROWS: usize = 800;
+                            let expected_rows =
+                                (audio.duration as f32 * target_fps).ceil() as usize;
+                            if expected_rows > MAX_ROWS {
+                                let original_fps = target_fps;
+                                target_fps = MAX_ROWS as f32 / audio.duration as f32;
+                                result.push_str(&format!(
+                                    "\n⚠ Resolution auto-reduced from {:.1} to \
+                                     {:.1} pts/sec ({} row cap) to fit context \
+                                     window. Zoom into a shorter section with \
+                                     start_time/end_time for higher detail.\n",
+                                    original_fps, target_fps, MAX_ROWS,
+                                ));
+                            }
+
                             let mut ds_onset = downsample::downsample_f32(
                                 &analysis.onset_envelope,
                                 fps,
@@ -793,7 +841,7 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: call with no resolution first to get summary + section boundaries, use the boundary timestamps to pick interesting sections, then call again with start_time/end_time and resolution='high' to zoom in. This minimizes token cost while maximizing insight."
+        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: (1) call with NO resolution to get summary + section boundaries, (2) use boundary timestamps to pick interesting sections, (3) call with start_time/end_time and resolution='high' on SHORT sections (≤20s). Token budget: resolution='high' on a 60s section returns ~240 rows (~20K tokens). Prefer resolution='medium' or 'low' for sections longer than 20s. The tool will auto-reduce resolution if output would exceed 800 rows."
     )]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
@@ -1155,11 +1203,30 @@ impl AudioAnalyzerServer {
                 // Append unified time-series table if resolution was requested
                 if let Some(ref res) = params.resolution {
                     match downsample::resolution_to_fps(res) {
-                        Ok(target_fps) => {
+                        Ok(mut target_fps) => {
                             let fps = downsample::native_fps(
                                 spectrogram.sample_rate,
                                 spectrogram.hop_length,
                             );
+
+                            // Auto-cap: keep output under 800 rows to avoid
+                            // blowing context windows.  If the requested fps
+                            // would produce too many rows, reduce it and note
+                            // the change in the output.
+                            const MAX_ROWS: usize = 800;
+                            let expected_rows =
+                                (audio.duration as f32 * target_fps).ceil() as usize;
+                            if expected_rows > MAX_ROWS {
+                                let original_fps = target_fps;
+                                target_fps = MAX_ROWS as f32 / audio.duration as f32;
+                                result.push_str(&format!(
+                                    "\n⚠ Resolution auto-reduced from {:.1} to \
+                                     {:.1} pts/sec ({} row cap) to fit context \
+                                     window. Zoom into a shorter section with \
+                                     start_time/end_time for higher detail.\n",
+                                    original_fps, target_fps, MAX_ROWS,
+                                ));
+                            }
 
                             let mut ds_centroid =
                                 downsample::downsample_f32(&centroid, fps, target_fps);
