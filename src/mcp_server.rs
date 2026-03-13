@@ -112,7 +112,7 @@ struct SpectralParams {
     /// Hop length between windows (default: n_fft/4). Rarely needs changing.
     #[serde(default, deserialize_with = "deserialize_lenient_usize")]
     hop_length: Option<usize>,
-    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
+    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only. Token budget: "high" on 60s ≈ 240 rows — prefer for ≤20s windows. "medium" on 60s ≈ 60 rows — good general purpose. "low" for structural overview of long sections. Auto-capped at 800 rows.
     resolution: Option<String>,
     /// Start time in seconds — analyse from this point. Omit to start from the beginning.
     #[serde(default, deserialize_with = "deserialize_lenient_f32")]
@@ -126,7 +126,7 @@ struct SpectralParams {
 struct HarmonicParams {
     /// Absolute path to the audio file
     path: String,
-    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
+    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only. Token budget: "high" on 60s ≈ 240 rows — prefer for ≤20s windows. "medium" on 60s ≈ 60 rows — good general purpose. "low" for structural overview of long sections. Auto-capped at 800 rows.
     resolution: Option<String>,
     /// Start time in seconds — analyse from this point. Omit to start from the beginning.
     #[serde(default, deserialize_with = "deserialize_lenient_f32")]
@@ -146,7 +146,7 @@ struct RhythmParams {
     /// Internal search range upper bound for tempo detection. Default 220. You almost never need to set this — only use if tempo detection gives wrong results and you know the approximate BPM range.
     #[serde(default, deserialize_with = "deserialize_lenient_f32")]
     max_bpm: Option<f32>,
-    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
+    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only. Token budget: "high" on 60s ≈ 240 rows — prefer for ≤20s windows. "medium" on 60s ≈ 60 rows — good general purpose. "low" for structural overview of long sections. Auto-capped at 800 rows.
     resolution: Option<String>,
     /// Start time in seconds — analyse from this point. Omit to start from the beginning.
     #[serde(default, deserialize_with = "deserialize_lenient_f32")]
@@ -160,7 +160,7 @@ struct RhythmParams {
 struct FullAnalysisParams {
     /// Absolute path to the audio file
     path: String,
-    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only.
+    /// Time-series resolution: "low" (~0.5/sec), "medium" (~1/sec), "high" (~4/sec), or a number. Omit for summary only. Token budget: "high" on 60s ≈ 240 rows — prefer for ≤20s windows. "medium" on 60s ≈ 60 rows — good general purpose. "low" for structural overview of long sections. Auto-capped at 800 rows.
     resolution: Option<String>,
     /// Start time in seconds — analyse from this point. Omit to start from the beginning.
     #[serde(default, deserialize_with = "deserialize_lenient_f32")]
