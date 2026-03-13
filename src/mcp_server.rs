@@ -303,7 +303,12 @@ fn format_platform_diff(measured: f32, target: f32) -> String {
 #[tool_router]
 impl AudioAnalyzerServer {
     #[tool(
-        description = "Get basic information about an audio file (duration, sample rate, sample count). Quick and cheap — use this first to confirm the file is readable and see how long it is before running heavier analysis."
+        description = "Get basic information about an audio file (duration, sample rate, sample count). Quick and cheap — use this first to confirm the file is readable and see how long it is before running heavier analysis.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     fn audio_info(&self, Parameters(params): Parameters<AudioInfoParams>) -> String {
         match load_audio(&params.path) {
@@ -321,7 +326,12 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, stereo width, balance, mono compatibility), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections."
+        description = "Analyse spectral and temporal features: brightness (centroid), richness (bandwidth), energy distribution (rolloff), tonality (flatness), frequency band energy (sub-bass through brilliance — essential for mix diagnosis), spectral contrast (peak vs valley per band — reveals clarity vs muddiness), dynamic range (crest factor, loudness range, peak dBFS), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, stereo width, balance, mono compatibility), loudness (RMS), texture (zero crossing rate), and timbre (MFCCs). Use when you need spectral detail without harmonic/rhythm overhead. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     fn spectral_features(&self, Parameters(params): Parameters<SpectralParams>) -> String {
         match load_and_analyse(
@@ -635,7 +645,12 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships (tonnetz). Essential for understanding melody, chords, and harmony. Note: key detection uses major/minor profiles only — for modal music, check the pitch class distribution for the actual tonal centre. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections."
+        description = "Analyse harmonic content: key detection, pitch class distribution (which notes are prominent), and tonal relationships (tonnetz). Essential for understanding melody, chords, and harmony. Note: key detection uses major/minor profiles only — for modal music, check the pitch class distribution for the actual tonal centre. Omit resolution for a quick summary; set resolution='low' for time-series overview; use start_time/end_time with resolution='high' to zoom into specific sections.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     fn harmonic_analysis(&self, Parameters(params): Parameters<HarmonicParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
@@ -760,7 +775,12 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Tempo detection may report half/double time on electronic music or solo instruments — use min_bpm/max_bpm to constrain if needed. Omit resolution for a quick summary; set resolution='low' for onset strength overview; use start_time/end_time with resolution='high' to zoom into specific sections."
+        description = "Analyse rhythm: tempo estimation (BPM), beat positions, tempo stability, and beat statistics. Shows whether music has a steady beat or is free-tempo. Tempo detection may report half/double time on electronic music or solo instruments — use min_bpm/max_bpm to constrain if needed. Omit resolution for a quick summary; set resolution='low' for onset strength overview; use start_time/end_time with resolution='high' to zoom into specific sections.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     fn rhythm_analysis(&self, Parameters(params): Parameters<RhythmParams>) -> String {
         match load_and_analyse(&params.path, None, None, params.start_time, params.end_time) {
@@ -841,7 +861,12 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: (1) call with NO resolution to get summary + section boundaries, (2) use boundary timestamps to pick interesting sections, (3) call with start_time/end_time and resolution='high' on SHORT sections (≤20s). Token budget: resolution='high' on a 60s section returns ~240 rows (~20K tokens). Prefer resolution='medium' or 'low' for sections longer than 20s. The tool will auto-reduce resolution if output would exceed 800 rows."
+        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: (1) call with NO resolution to get summary + section boundaries, (2) use boundary timestamps to pick interesting sections, (3) call with start_time/end_time and resolution='high' on SHORT sections (≤20s). Token budget: resolution='high' on a 60s section returns ~240 rows (~20K tokens). Prefer resolution='medium' or 'low' for sections longer than 20s. The tool will auto-reduce resolution if output would exceed 800 rows.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     fn full_analysis(&self, Parameters(params): Parameters<FullAnalysisParams>) -> String {
         let start = std::time::Instant::now();
@@ -1415,7 +1440,12 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Compare two audio files side by side — your mix vs a reference track. Returns structured deltas for loudness (LUFS, true peak, LRA), dynamics (crest factor, loudness range), spectral balance (7 frequency bands in dB), spectral contrast, tonal character (brightness, richness), stereo field (phase, width, balance, mono compatibility), key, and tempo. No time-series — just the summary metrics that matter for mix comparison, in one compact table. Use this to diagnose how a mix differs from a reference and what to adjust."
+        description = "Compare two audio files side by side — your mix vs a reference track. Returns structured deltas for loudness (LUFS, true peak, LRA), dynamics (crest factor, loudness range), spectral balance (7 frequency bands in dB), spectral contrast, tonal character (brightness, richness), stereo field (phase, width, balance, mono compatibility), key, and tempo. No time-series — just the summary metrics that matter for mix comparison, in one compact table. Use this to diagnose how a mix differs from a reference and what to adjust.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     fn compare(&self, Parameters(params): Parameters<CompareParams>) -> String {
         compare::compare_tracks(&params.path_a, &params.path_b)
