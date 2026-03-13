@@ -1,6 +1,8 @@
 # Changelog
 
-## [1.0.0-rc1] - 2026-03-13
+## [1.0.0] - 2026-03-13
+
+Claude can hear music now.
 
 ### Added
 - **Section boundary detection** — multi-feature novelty analysis (energy, spectral, harmonic,
@@ -11,8 +13,26 @@
 - **A/B comparison tool** — dedicated `compare` MCP tool that analyses two tracks side-by-side
   and returns a compact diff table highlighting differences in loudness, dynamics, spectral balance,
   stereo field, key, and tempo.
+- **Token budget safety** — 800-row auto-cap on all time-series output prevents context window
+  blowouts. Resolution auto-downsample with user notification. Token cost guidance in tool
+  parameter descriptions steers models toward appropriate resolution choices.
 - GitHub Actions CI pipeline — `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`
   on every push and pull request.
+
+### Changed
+- Improved tool descriptions with token budget awareness, workflow guidance, and stronger
+  emphasis on file path usage (not uploads).
+
+## [1.0.0-rc2] - 2026-03-13
+
+### Added
+- Token budget guidance in resolution parameter descriptions across all tools.
+- 800-row auto-cap on time-series output to prevent context window blowouts.
+
+## [1.0.0-rc1] - 2026-03-13
+
+### Added
+- Section boundary detection, A/B comparison tool, CI pipeline (see 1.0.0 above).
 
 ## [0.5.0] - 2026-03-12
 

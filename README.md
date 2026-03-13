@@ -35,7 +35,7 @@ Full analysis of a 60-second track completes in under 2 seconds (including sourc
 
 ## See it in action
 
-[Watch Claude analyse a jazz track and give production-grade mastering feedback](https://claude.ai/share/0fbcf214-e75b-4dbc-8e0f-f60c772acc58) — LUFS loudness, true peak headroom, streaming platform normalization, spectral balance, and mix advice, all from raw audio analysis.
+[Watch a fresh Claude analyse four tracks in one session](https://claude.ai/share/e40ea498-fe3e-4b22-9a70-81edf6637514) — an original piano/brass composition, Bohemian Rhapsody's full structure mapped with section boundaries, an A/B mix comparison with production advice, and a thunderstorm field recording where it triages music metrics as "meaningless" vs "physically real." All four analyses fit in a single context window.
 
 ## Installation
 
