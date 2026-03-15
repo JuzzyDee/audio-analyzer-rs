@@ -24,7 +24,8 @@ use serde::Deserialize;
 
 // Import our analysis library
 use audio_visualizer_rs::analysis::{
-    compare, downsample, harmonic, percussive, rhythm, sections, spectral, stereo, temporal,
+    compare, downsample, harmonic, masking, percussive, rhythm, sections, spectral, stereo,
+    temporal,
 };
 use audio_visualizer_rs::{load_audio, load_audio_stereo};
 
@@ -861,7 +862,7 @@ impl AudioAnalyzerServer {
     }
 
     #[tool(
-        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: (1) call with NO resolution to get summary + section boundaries, (2) use boundary timestamps to pick interesting sections, (3) call with start_time/end_time and resolution='high' on SHORT sections (≤20s). Token budget: resolution='high' on a 60s section returns ~240 rows (~20K tokens). Prefer resolution='medium' or 'low' for sections longer than 20s. The tool will auto-reduce resolution if output would exceed 800 rows.",
+        description = "Run complete analysis: basic info, spectral/temporal features (brightness, richness, loudness, texture, timbre, frequency band energy, spectral contrast, dynamic range), LUFS loudness (EBU R128 integrated, true peak, LRA, streaming platform targets), frequency masking detection (crowding per band, harmonic/percussive collision, cross-band bleed — identifies muddy areas in a mix), stereo field (phase correlation, width, balance, mono compatibility), harmonic content (key, notes), rhythm (tempo, beats), percussive character (attack sharpness, onset density, harmonic/percussive balance), and section boundaries (structural changes detected via multi-feature novelty — energy, spectral, harmonic, texture). Recommended workflow: (1) call with NO resolution to get summary + section boundaries, (2) use boundary timestamps to pick interesting sections, (3) call with start_time/end_time and resolution='high' on SHORT sections (≤20s). Token budget: resolution='high' on a 60s section returns ~240 rows (~20K tokens). Prefer resolution='medium' or 'low' for sections longer than 20s. The tool will auto-reduce resolution if output would exceed 800 rows.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -959,6 +960,23 @@ impl AudioAnalyzerServer {
                     audio.sample_rate,
                     spectrogram.hop_length,
                 );
+
+                // Masking detection — reuse HPSS result (already computed for perc_feats)
+                let harmonic_spec = masking::spectrogram_from_hpss(
+                    &hpss_result.harmonic,
+                    spectrogram.sample_rate,
+                    spectrogram.n_fft,
+                    spectrogram.hop_length,
+                );
+                let percussive_spec = masking::spectrogram_from_hpss(
+                    &hpss_result.percussive,
+                    spectrogram.sample_rate,
+                    spectrogram.n_fft,
+                    spectrogram.hop_length,
+                );
+                let h_bands = spectral::frequency_band_energy(&harmonic_spec);
+                let p_bands = spectral::frequency_band_energy(&percussive_spec);
+                let masking_result = masking::detect_masking(&bands, &sc, &h_bands, &p_bands);
 
                 let dr = temporal::dynamic_range(
                     &audio.samples,
@@ -1194,6 +1212,9 @@ impl AudioAnalyzerServer {
                     format_platform_diff(lufs.integrated, -14.0),
                 ));
 
+                // Masking summary
+                result.push_str(&masking::format_masking_summary(&masking_result));
+
                 // Stereo analysis — reuse the stereo data already loaded for LUFS
                 let stereo_data = stereo_loaded.map(|(left, right, channels)| {
                     stereo::analyse_stereo(
@@ -1326,6 +1347,11 @@ impl AudioAnalyzerServer {
                                 downsample::downsample_array(&bands.band_energies, fps, target_fps);
                             let mut ds_contrast =
                                 downsample::downsample_array(&sc.contrast, fps, target_fps);
+                            let mut ds_masking = downsample::downsample_array(
+                                &masking_result.analysis.crowding,
+                                fps,
+                                target_fps,
+                            );
 
                             offset_times(&mut ds_centroid, time_offset);
                             offset_times(&mut ds_bandwidth, time_offset);
@@ -1342,6 +1368,7 @@ impl AudioAnalyzerServer {
                             offset_times_array(&mut ds_tonnetz, time_offset);
                             offset_times_array(&mut ds_bands, time_offset);
                             offset_times_array(&mut ds_contrast, time_offset);
+                            offset_times_array(&mut ds_masking, time_offset);
 
                             let chroma_cols: &[&str] = &[
                                 "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -1374,6 +1401,15 @@ impl AudioAnalyzerServer {
                                     }
                                 })
                                 .collect();
+                            let masking_cols: Vec<&str> = vec![
+                                "mk_sub_bass",
+                                "mk_bass",
+                                "mk_low_mid",
+                                "mk_mid",
+                                "mk_upper_mid",
+                                "mk_presence",
+                                "mk_brilliance",
+                            ];
 
                             // Use the minimum length across all series — the chromagram
                             // uses a larger internal FFT (n_fft=8192) so it can produce
@@ -1427,6 +1463,7 @@ impl AudioAnalyzerServer {
                                 Some((&ds_tonnetz, tonnetz_cols)),
                                 Some((&ds_bands, &band_cols)),
                                 Some((&ds_contrast, &contrast_cols)),
+                                Some((&ds_masking, &masking_cols)),
                             ));
                         }
                         Err(e) => result.push_str(&format!("\n\nResolution error: {}", e)),

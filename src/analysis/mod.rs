@@ -11,6 +11,7 @@
 pub mod compare;
 pub mod downsample;
 pub mod harmonic;
+pub mod masking;
 pub mod percussive;
 pub mod rhythm;
 pub mod sections;

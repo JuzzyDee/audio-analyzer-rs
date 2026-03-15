@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use audio_visualizer_rs::analysis::compare;
 use audio_visualizer_rs::analysis::harmonic;
+use audio_visualizer_rs::analysis::masking;
 use audio_visualizer_rs::analysis::percussive;
 use audio_visualizer_rs::analysis::rhythm;
 use audio_visualizer_rs::analysis::sections;
@@ -274,7 +275,31 @@ fn main() {
     println!("  Peak attack sharp: {:.3}", max_sharpness);
     println!("  Computed in:       {:.2?}\n", perc_time);
 
-    // --- Step 7: Dynamic range ---
+    // --- Step 7: Frequency masking detection ---
+    println!("Computing frequency masking detection...");
+    let start = Instant::now();
+
+    let harmonic_spec = masking::spectrogram_from_hpss(
+        &hpss_result.harmonic,
+        audio.sample_rate,
+        spectrogram.n_fft,
+        spectrogram.hop_length,
+    );
+    let percussive_spec = masking::spectrogram_from_hpss(
+        &hpss_result.percussive,
+        audio.sample_rate,
+        spectrogram.n_fft,
+        spectrogram.hop_length,
+    );
+    let h_bands = spectral::frequency_band_energy(&harmonic_spec);
+    let p_bands = spectral::frequency_band_energy(&percussive_spec);
+    let masking_result = masking::detect_masking(&bands, &sc, &h_bands, &p_bands);
+    let masking_time = start.elapsed();
+
+    print!("{}", masking::format_masking_summary(&masking_result));
+    println!("  Computed in:     {:.2?}\n", masking_time);
+
+    // --- Step 8: Dynamic range ---
     println!("Computing dynamic range...");
     let start = Instant::now();
 
@@ -419,6 +444,7 @@ fn main() {
         + harmonic_time
         + rhythm_time
         + perc_time
+        + masking_time
         + dr_time
         + stereo_load_time
         + lufs_time
